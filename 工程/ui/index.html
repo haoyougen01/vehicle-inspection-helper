@@ -289,7 +289,7 @@ table.res-tbl tr:last-child td{border-bottom:0;}
       </div>
       <div class="grid">
         <label class="field"><span>车牌号（选填）</span>
-          <input type="text" id="plate" placeholder="如 京A12345" maxlength="12">
+          <input type="text" id="plate" placeholder="如 津A12345" maxlength="12">
         </label>
         <label class="field"><span>车架号（选填）</span>
           <input type="text" id="vin" placeholder="VIN / 车架号" maxlength="24">
@@ -302,8 +302,13 @@ table.res-tbl tr:last-child td{border-bottom:0;}
         </label>
         <label class="field"><span>车辆类型</span>
           <select id="vtype">
-            <option value="1">非营运小微型载客汽车 / 摩托车（免检新政）</option>
-            <option value="0">面包车及其他车型（不享受免检）</option>
+            <option value="3">9座（含）以下非营运小微型载客汽车（面包车除外）</option>
+            <option value="4">摩托车</option>
+            <option value="7">非营运大型轿车</option>
+            <option value="1">营运客车</option>
+            <option value="2">货车、大中型客车</option>
+            <option value="6">面包车</option>
+            <option value="5">其他机动车</option>
           </select>
         </label>
         <label class="field"><span>当前公里数（选填）</span>
@@ -311,6 +316,7 @@ table.res-tbl tr:last-child td{border-bottom:0;}
         </label>
       </div>
       <div class="switch-row">
+        <label class="switch"><input type="checkbox" id="chkSg"><span class="track"></span><span>曾发生致人伤亡事故 / 非法改装被处罚（不享受免检）</span></label>
         <label class="switch"><input type="checkbox" id="chkHist"><span class="track"></span><span>同时预览 20 年检验节点（自登记日起算）</span></label>
         <label class="switch"><input type="checkbox" id="chkAuto"><span class="track"></span><span>开机自动启动并弹窗提醒</span></label>
       </div>
@@ -609,6 +615,7 @@ $("btnQuery").onclick = function(){
     regDate: $("regDate").value,
     vtype: $("vtype").value,
     km: $("km").value,
+    sgqk: $("chkSg").checked,
     history: $("chkHist").checked
   };
   state.queryPayload = payload;
@@ -641,7 +648,7 @@ function openEditor(idx){
   }
   var isNew = !idx;
   var body = '<div class="form-grid">'
-    + '<label class="field"><span>车牌号</span><input type="text" id="ePlate" placeholder="如 京A12345" value="' + esc(r ? (r.plate || "") : "") + '"></label>'
+    + '<label class="field"><span>车牌号</span><input type="text" id="ePlate" placeholder="如 津A12345" value="' + esc(r ? (r.plate || "") : "") + '"></label>'
     + '<label class="field"><span>登记日期 *</span><input type="text" id="eDate" placeholder="2014-01-10" value="' + esc(r ? (r.regStr || "") : "") + '"></label>'
     + '<label class="field full"><span>车架号</span><input type="text" id="eVin" placeholder="选填" value="' + esc(r ? (r.vin || "") : "") + '"></label>'
     + '<label class="field"><span>编号</span><input type="text" id="eCode" placeholder="选填" value="' + esc(r ? (r.code || "") : "") + '"></label>'
@@ -655,8 +662,11 @@ function openEditor(idx){
     { t:"取消" },
     { t:"保存", cls:"primary", fn: function(){ submitEditor(); return false; } }
   ]);
-  if(r) $("eType").value = r.newRules ? "1" : "0";
-  if(isNew) $("eType").value = "1";
+  if(r){
+    $("eType").value = String(r.vtype || 3);
+    $("eSg").value = String(r.sgqk || 0);
+  }
+  if(isNew){ $("eType").value = "3"; $("eSg").value = "0"; }
   setTimeout(function(){ var el = $(isNew ? "ePlate" : "eDate"); if(el) el.focus(); }, 60);
 }
 
@@ -668,7 +678,8 @@ function submitEditor(){
     vin: $("eVin").value,
     code: $("eCode").value,
     km: $("eKm").value,
-    vtype: $("eType").value
+    vtype: $("eType").value,
+    sgqk: $("eSg").value === "1"
   };
   if(!payload.regDate.trim()){ toast("err","请填写登记日期"); return; }
   setBusy(true, "保存中…");

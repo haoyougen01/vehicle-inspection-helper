@@ -188,33 +188,49 @@ var nowCached = function(force){
 	return gNowObj, gNowNet;
 }
 
-//---------- 年检规则计算 ----------
+//---------- 年检规则计算（算法口径参考交管12123"车检计算器"） ----------
 
-//生成全部检验节点 {n=第几年;date=截止日;online=是否上线}
-var allNodes = function(reg,newRules){
-	var list = {};
-	var spec, baseY;
-	if(newRules){
-		spec = {2;4;6;8;10};
-		baseY = 10;
-	}
-	else{
-		spec = {2;4;6};
-		baseY = 6;
-	}
-	var isOnline = function(n){
-		if(!newRules) return true;
-		return (n==6 or n==10);
-	}
-	for(i=1;#spec;1){
-		table.push(list,{ n=spec[i]; date=mkTime(reg,spec[i]); online=isOnline(spec[i]) });
-	}
-	var n = baseY + 1;
-	while(n <= 60){
-		table.push(list,{ n=n; date=mkTime(reg,n); online=true });
-		n++;
-	}
-	return list;
+//车辆类型（编号沿用交管12123 车检计算器的类型值）
+var VTYPES = {
+	{ code=3; name="9座（含）以下非营运小微型载客汽车（面包车除外）"; short="小微型客车" };
+	{ code=4; name="摩托车"; short="摩托车" };
+	{ code=7; name="非营运大型轿车"; short="非营运大型轿车" };
+	{ code=1; name="营运客车"; short="营运客车" };
+	{ code=2; name="货车、大中型客车"; short="货车/大中型客车" };
+	{ code=6; name="面包车"; short="面包车" };
+	{ code=5; name="其他机动车"; short="其他机动车" };
+}
+var vtFind = function(code){
+	for(k=1;#VTYPES;1){ if(VTYPES[k].code == code) return VTYPES[k]; }
+	return VTYPES[1];
+}
+var vtName = function(code){ return vtFind(code).name; }
+var vtShort = function(code){ return vtFind(code).short; }
+//是否享受免检新政：仅 3/4/7 类且无伤亡事故、无非法改装被处罚
+var vtFree = function(vtype,sgqk){ return (vtype==3 or vtype==4 or vtype==7) and (sgqk != 1); }
+
+//某年某月最后一天
+var lastDayOfMonth = function(y,m){
+	var dm = 31;
+	if(m==2){ if( (y%4==0 and y%100!=0) or (y%400==0) ) dm = 29; else dm = 28; }
+	elseif(m==4 or m==6 or m==9 or m==11){ dm = 30; }
+	return time( string.format("%04d/%02d/%02d",y,m,dm), "%Y/%m/%d" );
+}
+
+//注册日期 + n 个月 → 该月最后一天（检验有效期止；官方口径：注册月的月底，不是注册日当天）
+var dueDate = function(reg,months){
+	var t = reg.month - 1 + months;
+	var y = reg.year + math.floor(t/12);
+	var m = t % 12 + 1;
+	return lastDayOfMonth(y,m);
+}
+
+//节点标签：第N年 / 第N年M个月（半年一检的节点会出现月份）
+var nodeLabel = function(months){
+	var y = math.floor(months/12);
+	var m = months % 12;
+	if(m == 0) return "第" ++ y ++ "年";
+	return "第" ++ y ++ "年" ++ m ++ "个月";
 }
 
 //清理里程输入：支持 "85000"、"8.5万" 等写法，返回数字字符串（无效返回空串）
@@ -232,17 +248,63 @@ var vin_km_clean = function(s){
 	return tostring(math.floor(num));
 }
 
+//生成检验节点：months = 距注册日月数；online = 是否上线检测
+//规则（对应官方 车检计算器）：
+//  3/4/7 且无事故：2/4/8 年领标，6/10 年上线，之后每年上线
+//  3/4/7 有伤亡事故或非法改装：6 年内每 2 年上线，6-15 年每年，15 年后每半年
+//  面包车：6 年内每 2 年上线，6-15 年每年，15 年后每半年
+//  营运客车：5 年内每年，之后每半年
+//  货车/大中型客车：10 年内每年，之后每半年
+//  其他机动车：每年
+var allNodes = function(reg,vtype,sgqk){
+	var list = {};
+	var push = function(months,online){
+		table.push(list,{ months=months; n=math.floor(months/12); label=nodeLabel(months);
+			date=dueDate(reg,months); online=online });
+	}
+	if( vtFree(vtype,sgqk) ){
+		push(24,false); push(48,false); push(72,true); push(96,false); push(120,true);
+		for(y=11;y<=40;1){ push(y*12,true); }
+	}
+	elseif(vtype == 1){
+		for(m=12;m<=60;m+=12){ push(m,true); }
+		for(m=66;m<=480;m+=6){ push(m,true); }
+	}
+	elseif(vtype == 2){
+		for(m=12;m<=120;m+=12){ push(m,true); }
+		for(m=126;m<=480;m+=6){ push(m,true); }
+	}
+	elseif(vtype == 6){
+		for(m=24;m<=72;m+=24){ push(m,true); }
+		for(m=84;m<=180;m+=12){ push(m,true); }
+		for(m=186;m<=480;m+=6){ push(m,true); }
+	}
+	elseif(vtype == 5){
+		for(m=12;m<=480;m+=12){ push(m,true); }
+	}
+	else{
+		for(m=24;m<=72;m+=24){ push(m,true); }
+		for(m=84;m<=180;m+=12){ push(m,true); }
+		for(m=186;m<=480;m+=6){ push(m,true); }
+	}
+	return list;
+}
+
 //单台车计算，返回结构化结果
-var buildResult = function(plate,reg,now,newRules,ruleLabel,vin,code,km){
-	var nodes = allNodes(reg,newRules);
+var buildResult = function(plate,reg,now,vtype,sgqk,vin,code,km){
+	var nodes = allNodes(reg,vtype,sgqk);
+	var free = vtFree(vtype,sgqk);
+	var ruleLabel = vtName(vtype);
+	if(free) ruleLabel = ruleLabel ++ "（享受免检新政）";
+	elseif(sgqk == 1 and (vtype==3 or vtype==4 or vtype==7)) ruleLabel = ruleLabel ++ "（有伤亡事故/非法改装，不享受免检）";
+	else ruleLabel = ruleLabel ++ "（需上线检测）";
+
 	var next = null;
 	var curRows = {};
 	var nextRows = {};
 	var hist = {};
 	var curY = now.year;
 	var nextY = now.year + 1;
-	//20年节点区间：自产权登记日起算，至登记日+20年（含尚未到期的未来节点）
-	var histEnd = mkTime(reg,20);
 
 	var nodeStatus = function(d,ws){
 		if( tonumber(d) < tonumber(now) ) return "已过期";
@@ -252,7 +314,7 @@ var buildResult = function(plate,reg,now,newRules,ruleLabel,vin,code,km){
 	var rowText = function(nd,ws){
 		var s;
 		if(nd.online) s = "上线检测"; else s = "免检·申领标志";
-		return "第" ++ nd.n ++ "年 · 截止" ++ fmtDate(nd.date) ++ " · " ++ s ++ " · " ++ nodeStatus(nd.date,ws);
+		return nd.label ++ " · 截止" ++ fmtDate(nd.date) ++ " · " ++ s ++ " · " ++ nodeStatus(nd.date,ws);
 	}
 
 	for(i=1;#nodes;1){
@@ -262,12 +324,12 @@ var buildResult = function(plate,reg,now,newRules,ruleLabel,vin,code,km){
 		ws.addMonths(-3);
 		var daysLeft = math.floor( ( tonumber(d) - tonumber(now) ) / 86400 );
 		if(!next and tonumber(d) >= tonumber(now)){
-			next = { n=nd.n; date=d; online=nd.online; ws=ws; daysLeft=daysLeft };
+			next = { label=nd.label; months=nd.months; n=nd.n; date=d; online=nd.online; ws=ws; daysLeft=daysLeft };
 		}
 		var rt = rowText(nd,ws);
 		if( d.year == curY ) table.push(curRows,rt);
 		elseif( d.year == nextY ) table.push(nextRows,rt);
-		if( nd.n <= 20 and tonumber(d) <= tonumber(histEnd) ){
+		if( nd.months <= 240 ){
 			var st, past = false;
 			if( tonumber(d) < tonumber(now) ){
 				past = true;
@@ -275,7 +337,7 @@ var buildResult = function(plate,reg,now,newRules,ruleLabel,vin,code,km){
 			}
 			elseif( tonumber(now) >= tonumber(ws) ) st = "窗口期内·可办理";
 			else st = "未到办理窗口";
-			table.push(hist,{ d=fmtDate(d); n=nd.n; online=nd.online; st=st; past=past; days=-daysLeft });
+			table.push(hist,{ d=fmtDate(d); label=nd.label; months=nd.months; online=nd.online; st=st; past=past; days=-daysLeft });
 		}
 	}
 
@@ -325,9 +387,10 @@ var buildResult = function(plate,reg,now,newRules,ruleLabel,vin,code,km){
 
 	return {
 		plate = plate; regStr = fmtDate(reg); ageYears = ageYears;
-		next = next; level = level; rule = ruleLabel;
+		next = next; level = level; rule = ruleLabel; free = free;
+		vtype = vtype; sgqk = sgqk;
 		curY = curY; nextY = nextY;
-		curRows = curRows; nextRows = nextRows; hist = hist; histEndStr = fmtDate(histEnd);
+		curRows = curRows; nextRows = nextRows; hist = hist; histEndStr = fmtDate(mkTime(reg,20));
 		vin = vin or ""; code = code or ""; km = kmNum; dispo = dispo;
 	}
 }
@@ -480,6 +543,22 @@ var readCsvRows = function(path){
 	return rows;
 }
 
+//车辆类型文本/编号 → 类型编号（识别不了返回 0）
+var vtCodeOf = function(v){
+	var t = trimStr(v);
+	if(!#t) return 0;
+	var num = tonumber(t);
+	if(num and num >= 1 and num <= 7) return num;
+	if( string.match(t,"面包车") ) return 6;
+	if( string.match(t,"摩托") ) return 4;
+	if( string.match(t,"大型轿车") ) return 7;
+	if( string.match(t,"营运") ) return 1;
+	if( string.match(t,"货车") or string.match(t,"大中型") ) return 2;
+	if( string.match(t,"其他") ) return 5;
+	if( string.match(t,"小微型") or string.match(t,"载客汽车") ) return 3;
+	return 0;
+}
+
 //从数据行提取 {plate=..;dateStr=..} 列表，自动识别表头列
 var extractVehicles = function(rows){
 	var plateCol = 1;
@@ -487,6 +566,8 @@ var extractVehicles = function(rows){
 	var vinCol = 0;
 	var codeCol = 0;
 	var kmCol = 0;
+	var vtCol = 0;
+	var sgCol = 0;
 	for(r=1;math.min(3,#rows);1){
 		var arr = rows[r];
 		for(c=1;#arr;1){
@@ -496,6 +577,8 @@ var extractVehicles = function(rows){
 			if( string.match(h,"车架") or string.match(string.upper(h),"VIN") ) vinCol = c;
 			if( string.match(h,"编号") or string.match(h,"发动机") ) codeCol = c;
 			if( string.match(h,"公里") or string.match(h,"里程") ) kmCol = c;
+			if( string.match(h,"车辆类型") or string.match(h,"@车型") ) vtCol = c;
+			if( string.match(h,"事故") or string.match(h,"违法") ) sgCol = c;
 		}
 	}
 	var list = {};
@@ -506,11 +589,18 @@ var extractVehicles = function(rows){
 		var vin = "";
 		var code = "";
 		var km = "";
+		var vt = 0;
+		var sg = 0;
 		if(vinCol > 0 and vinCol <= #arr) vin = trimStr(arr[vinCol]);
 		if(codeCol > 0 and codeCol <= #arr) code = trimStr(arr[codeCol]);
 		if(kmCol > 0 and kmCol <= #arr) km = trimStr(arr[kmCol]);
+		if(vtCol > 0 and vtCol <= #arr) vt = vtCodeOf( trimStr(arr[vtCol]) );
+		if(sgCol > 0 and sgCol <= #arr){
+			var sv = trimStr(arr[sgCol]);
+			if( string.match(sv,"有") or string.match(sv,"是") or sv == "1" ) sg = 1;
+		}
 		if( #plate and #dstr and !string.match(plate,"车牌") ){
-			table.push(list,{ plate=plate; dateStr=dstr; vin=vin; code=code; km=km });
+			table.push(list,{ plate=plate; dateStr=dstr; vin=vin; code=code; km=km; vtype=vt; sgqk=sg });
 		}
 	}
 	return list;
@@ -566,7 +656,7 @@ var histBlock = function(hist){
 		if( h.past ) stCell = '<td class="c-red">' ++ h.st ++ '</td>';
 		elseif( h.st == "窗口期内·可办理" ) stCell = '<td class="c-orange">' ++ h.st ++ '</td>';
 		else stCell = '<td class="c-gray">' ++ h.st ++ '</td>';
-		table.push(out,'<tr><td>' ++ h.d ++ '</td><td>第' ++ h.n ++ '年</td><td>' ++ way ++ '</td>' ++ stCell ++ '</tr>');
+		table.push(out,'<tr><td>' ++ h.d ++ '</td><td>' ++ h.label ++ '</td><td>' ++ way ++ '</td>' ++ stCell ++ '</tr>');
 	}
 	return '<div class="res-wrap"><table class="res-tbl"><thead><tr><th>检验截止日</th><th>节点</th><th>方式</th><th>状态</th></tr></thead><tbody>' ++ table.concat(out,"") ++ '</tbody></table></div>';
 }
@@ -581,7 +671,7 @@ var cardHtml = function(v,showHistory){
 	if(#v.code) metaLine = metaLine ++ " · 编号 " ++ esc(v.code);
 	metaLine = metaLine ++ " · " ++ esc(v.rule);
 	s = s ++ '<div class="res-meta">' ++ metaLine ++ '</div>';
-	s = s ++ '<div class="res-next"><span>下次年检截止</span><b>' ++ fmtDate(v.next.date) ++ '</b><i>注册后第 ' ++ v.next.n ++ ' 年 · ' ++ lightName( lightLevel(v.next.daysLeft) ) ++ '</i></div>';
+	s = s ++ '<div class="res-next"><span>下次年检截止</span><b>' ++ fmtDate(v.next.date) ++ '</b><i>注册后' ++ v.next.label ++ ' · ' ++ lightName( lightLevel(v.next.daysLeft) ) ++ '</i></div>';
 	s = s ++ '<div class="res-sub">可办理窗口：' ++ fmtDate(v.next.ws) ++ ' 至 ' ++ fmtDate(v.next.date) ++ '（期满前3个月可提前办理）';
 	if(v.level==2) s = s ++ ' —— <span class="c-red">已逾期，请尽快办理！</span>';
 	if(v.level==1) s = s ++ ' —— 现在即可办理';
@@ -660,15 +750,16 @@ var mergeVehicle = function(list,v){
 }
 
 var saveTracking = function(list){
-	var out = { "车牌号,车架号,编号,登记日期,公里数,免检新政" };
+	var out = { "车牌号,车架号,编号,登记日期,公里数,车辆类型,事故标志" };
 	for(i=1;#list;1){
 		var p = list[i].plate;
 		if(!#p) p = "未填车牌";
-		var flag;
-		if(list[i].newRules) flag = "1"; else flag = "0";
-		table.push(out, p ++ "," ++ list[i].vin ++ "," ++ list[i].code ++ "," ++ list[i].dateStr ++ "," ++ list[i].km ++ "," ++ flag );
+		var vt = list[i].vtype or 3;
+		var sg = list[i].sgqk or 0;
+		table.push(out, p ++ "," ++ list[i].vin ++ "," ++ list[i].code ++ "," ++ list[i].dateStr ++ "," ++ list[i].km ++ "," ++ vt ++ "," ++ sg );
 	}
-	string.save(trackingPath, table.concat(out,'\r\n') );
+	//BOM：无 BOM 的 UTF-8 会被 Excel 按 GBK 解成乱码（读取侧会剥掉，不影响）
+	string.save(trackingPath, string.char(0xEF,0xBB,0xBF) ++ table.concat(out,'\r\n') );
 }
 
 var loadTracking = function(){
@@ -683,8 +774,15 @@ var loadTracking = function(){
 		if(#line){
 			var arr = string.split(line,",");
 			if(#arr>=6){
+				//列：车牌号,车架号,编号,登记日期,公里数,车辆类型,事故标志
+				//兼容旧 6 列格式（第 6 列为 免检新政 1/0）：1 → 小微型客车(3)，0 → 面包车(6)
+				var vt = tonumber(trimStr(arr[6]));
+				var sg = tonumber(trimStr(arr[7])) or 0;
+				if(!vt or vt < 1 or vt > 7){
+					vt = (trimStr(arr[6]) == "1") and 3 or 6;
+				}
 				table.push(list,{ plate=trimStr(arr[1]); vin=trimStr(arr[2]); code=trimStr(arr[3]);
-					dateStr=trimStr(arr[4]); km=trimStr(arr[5]); newRules=(trimStr(arr[6])=="1") });
+					dateStr=trimStr(arr[4]); km=trimStr(arr[5]); vtype=vt; sgqk=sg });
 			}
 		}
 	}
@@ -692,7 +790,7 @@ var loadTracking = function(){
 }
 
 //---------- 临时查询历史记录（不进入跟踪库） ----------
-//字段：查询时间,车牌号,车架号,编号,登记日期,公里数,免检新政
+//字段：查询时间,车牌号,车架号,编号,登记日期,公里数,车辆类型,事故标志
 
 var historyPath = io.fullpath("/查询历史.csv");
 var HISTORY_MAX = 200;
@@ -709,9 +807,15 @@ var loadHistory = function(){
 		if(#line){
 			var arr = string.split(line,",");
 			if(#arr>=7){
+				//兼容旧 7 列（第 7 列为 免检新政 1/0）：1 → 3 类，0 → 6 类
+				var vt = tonumber(trimStr(arr[7]));
+				var sg = tonumber(trimStr(arr[8])) or 0;
+				if(!vt or vt < 1 or vt > 7){
+					vt = (trimStr(arr[7]) == "1") and 3 or 6;
+				}
 				table.push(list,{ time=trimStr(arr[1]); plate=trimStr(arr[2]); vin=trimStr(arr[3]);
 					code=trimStr(arr[4]); dateStr=trimStr(arr[5]); km=trimStr(arr[6]);
-					newRules=(trimStr(arr[7])=="1") });
+					vtype=vt; sgqk=sg });
 			}
 		}
 	}
@@ -719,13 +823,14 @@ var loadHistory = function(){
 }
 
 var saveHistory = function(list){
-	var out = { "查询时间,车牌号,车架号,编号,登记日期,公里数,免检新政" };
+	var out = { "查询时间,车牌号,车架号,编号,登记日期,公里数,车辆类型,事故标志" };
 	for(i=1;#list;1){
 		var h = list[i];
 		table.push(out, h.time ++ "," ++ h.plate ++ "," ++ h.vin ++ "," ++ h.code ++ ","
-			++ h.dateStr ++ "," ++ h.km ++ "," ++ (h.newRules and "1" or "0") );
+			++ h.dateStr ++ "," ++ h.km ++ "," ++ (h.vtype or 3) ++ "," ++ (h.sgqk or 0) );
 	}
-	string.save(historyPath, table.concat(out,'\r\n') );
+	//BOM：无 BOM 的 UTF-8 会被 Excel 按 GBK 解成乱码（读取侧会剥掉，不影响）
+	string.save(historyPath, string.char(0xEF,0xBB,0xBF) ++ table.concat(out,'\r\n') );
 }
 
 //追加一条历史（同车牌+车架号+登记日期只保留最新，最多 200 条，倒序）
@@ -755,9 +860,7 @@ var historyRows = function(){
 		var row = { idx=i; time=h.time; plate=h.plate; vin=h.vin; code=h.code; regStr=h.dateStr;
 			due="-"; status="日期无法识别"; level=2 };
 		if(reg){
-			var rule;
-			if(h.newRules) rule = "非营运小微型/摩托车"; else rule = "面包车及其他";
-			var r = buildResult(h.plate,reg,now,h.newRules,rule,h.vin,h.code,h.km);
+			var r = buildResult(h.plate,reg,now,h.vtype,h.sgqk,h.vin,h.code,h.km);
 			row.due = fmtDate(r.next.date);
 			row.level = r.level;
 			row.status = statusText(r.level,r.next.daysLeft);
@@ -767,10 +870,9 @@ var historyRows = function(){
 	return rows, #list;
 }
 
-var sendHistory = function(){
-	var rows, cnt = historyRows();
-	send({ type="history"; rows=rows; count=cnt });
-}
+//下发查询历史的函数移到 send/toast/busy 之后定义（见"与网页通信"节末尾）
+//坑：exe 编译时前向引用的名字会解析成全局变量（null）——之前 sendHistory 在 send 之前定义，
+//    编译后调用 send 报 "Attempt to call send Type:null"，表现为查询报错、历史列表收不到数据
 
 //---------- 跟踪库 → 网页列表数据 ----------
 
@@ -784,16 +886,14 @@ var buildRows = function(){
 		var plate = it.plate;
 		var reg = parseDate(it.dateStr);
 		if(!reg){
-			table.push(rows,{ idx=i; plate=plate; vin=it.vin; code=it.code; km=it.km; newRules=it.newRules;
+			table.push(rows,{ idx=i; plate=plate; vin=it.vin; code=it.code; km=it.km; vtype=it.vtype; sgqk=it.sgqk;
 				regStr=it.dateStr; age="-"; due="-"; days=9999999; light=4; level=0;
 				wayHtml='<span class="badge gray">-</span>';
 				statusHtml='<span class="badge red">日期无法识别</span>';
 				dispoHtml='<span class="badge gray">-</span>' });
 			continue;
 		}
-		var rule;
-		if(it.newRules) rule = "非营运小微型/摩托车"; else rule = "面包车及其他";
-		var r = buildResult(plate,reg,now,it.newRules,rule,it.vin,it.code,it.km);
+		var r = buildResult(plate,reg,now,it.vtype,it.sgqk,it.vin,it.code,it.km);
 		var ll = lightLevel(r.next.daysLeft);
 		if(ll==3) st.red++; elseif(ll==2) st.yellow++; elseif(ll==1) st.blue++; else st.ok++;
 		if(r.dispo.eligible) st.dispo++;
@@ -816,7 +916,7 @@ var buildRows = function(){
 		var dispoCell;
 		if(r.dispo.eligible) dispoCell = '<span class="badge red">可处置</span>';
 		else dispoCell = '<span class="badge gray">未到</span>';
-		table.push(rows,{ idx=i; plate=plate; vin=it.vin; code=it.code; km=it.km; newRules=it.newRules;
+		table.push(rows,{ idx=i; plate=plate; vin=it.vin; code=it.code; km=it.km; vtype=it.vtype; sgqk=it.sgqk;
 			regStr=r.regStr; age=r.ageYears; due=fmtDate(r.next.date); days=r.next.daysLeft;
 			light=ll; level=level; wayHtml=wayCell; statusHtml=statusCell; dispoHtml=dispoCell });
 	}
@@ -851,6 +951,12 @@ var toast = function(kind,text){
 
 var busy = function(on,text){
 	send({ type="busy"; on=on; text=text });
+}
+
+//下发查询历史列表（必须定义在 send 之后：exe 编译时前向引用会解析成全局 null）
+var sendHistory = function(){
+	var rows, cnt = historyRows();
+	send({ type="history"; rows=rows; count=cnt });
 }
 
 var sendList = function(msg){
@@ -890,17 +996,15 @@ var doQuery = function(p){
 		return;
 	}
 	var now, net = nowCached();
-	var vtype = tonumber(p.vtype) or 0;
-	var newRules = (vtype == 1);
-	var ruleLabel;
-	if(newRules) ruleLabel = "非营运小微型载客汽车/摩托车（享受免检新政）";
-	else ruleLabel = "面包车及其他车型（不享受免检）";
+	var vtype = tonumber(p.vtype) or 3;
+	if(vtype < 1 or vtype > 7) vtype = 3;
+	var sgqk = p.sgqk and 1 or 0;
 	var plate = trimStr(p.plate);
 	var vin = trimStr(p.vin);
 	var code = trimStr(p.code);
 	var kmStr = trimStr(p.km);
 	var showHistory = p.history and true or false;
-	var r = buildResult(plate, reg, now, newRules, ruleLabel, vin, code, kmStr);
+	var r = buildResult(plate, reg, now, vtype, sgqk, vin, code, kmStr);
 	//结果缓存（供导出与勾选刷新）
 	gResults = { r };
 	gTitle = "手动查询结果";
@@ -914,7 +1018,7 @@ var doQuery = function(p){
 		var kmSave = kmStr;
 		if(kmNum > 0) kmSave = tostring(kmNum);
 		pushHistory({ time=tostring(now,"%Y-%m-%d %H:%M"); plate=plate; vin=vin; code=code;
-			dateStr=regDate; km=kmSave; newRules=newRules });
+			dateStr=regDate; km=kmSave; vtype=vtype; sgqk=sgqk });
 		sendHistory();
 	}
 	busy(false);
@@ -965,8 +1069,8 @@ var doImport = function(history,toTracking){
 	}
 
 	var now, net = nowCached();
-	var newRules = true; //导入数据默认按免检新政，可在车辆管理中逐台修改
-	var ruleLabel = "非营运小微型载客汽车/摩托车（享受免检新政）";
+	//导入默认按"小微型客车"(3)；若文件里带了"车辆类型"列则用它
+	var defVtype = 3;
 	var results = {};
 	var tlist = loadTracking();
 	var impTime = tostring(now,"%Y-%m-%d %H:%M");
@@ -974,12 +1078,14 @@ var doImport = function(history,toTracking){
 		var v = vehicles[i];
 		var reg = parseDate(v.dateStr);
 		if(reg){
-			table.push(results, buildResult(v.plate,reg,now,newRules,ruleLabel,v.vin,v.code,v.km) );
+			var vt = tonumber(v.vtype) or defVtype; if(vt < 1 or vt > 7) vt = defVtype;
+			var sg = tonumber(v.sgqk) or 0;
+			table.push(results, buildResult(v.plate,reg,now,vt,sg,v.vin,v.code,v.km) );
 			//导入数据总是留痕；只有"导入入库"才写跟踪库
 			pushHistory({ time=impTime; plate=v.plate; vin=v.vin; code=v.code;
-				dateStr=v.dateStr; km=v.km; newRules=newRules });
+				dateStr=v.dateStr; km=v.km; vtype=vt; sgqk=sg });
 			if(toTracking){
-				mergeVehicle(tlist,{ plate=v.plate; vin=v.vin; code=v.code; dateStr=v.dateStr; km=v.km; newRules=newRules });
+				mergeVehicle(tlist,{ plate=v.plate; vin=v.vin; code=v.code; dateStr=v.dateStr; km=v.km; vtype=vt; sgqk=sg });
 			}
 		}
 		else{
@@ -1026,8 +1132,12 @@ var doRefresh = function(){
 //⑤ 新增 / 编辑车辆
 var doSaveVehicle = function(p){
 	var list = loadTracking();
+	var vtype = tonumber(p.vtype) or 3;
+	if(vtype < 1 or vtype > 7) vtype = 3;
+	var sgqk = p.sgqk and 1 or 0;
 	var v = { plate = trimStr(p.plate); vin = trimStr(p.vin); code = trimStr(p.code);
-		dateStr = trimStr(p.regDate); km = vin_km_clean(p.km); newRules = (tonumber(p.vtype) == 1) };
+		dateStr = trimStr(p.regDate); km = vin_km_clean(p.km);
+		vtype = vtype; sgqk = sgqk };
 	if( !parseDate(v.dateStr) ){
 		busy(false);
 		toast("err","登记日期无法识别，请按 2014-01-10 格式填写");
@@ -1090,8 +1200,7 @@ var doDetail = function(p){
 	}
 	var now = nowCached();
 	var rule;
-	if(it.newRules) rule = "非营运小微型/摩托车"; else rule = "面包车及其他";
-	var r = buildResult(it.plate,reg,now,it.newRules,rule,it.vin,it.code,it.km);
+	var r = buildResult(it.plate,reg,now,it.vtype,it.sgqk,it.vin,it.code,it.km);
 	send({ type="detail"; title="车辆详情 · " ++ title; html=renderResult(title, "登记日期 " ++ r.regStr, {r}, true) });
 }
 
@@ -1110,8 +1219,7 @@ var doOverview = function(){
 			continue;
 		}
 		var rule;
-		if(it.newRules) rule = "非营运小微型/摩托车"; else rule = "面包车及其他";
-		var r = buildResult(it.plate,reg,now,it.newRules,rule,it.vin,it.code,it.km);
+		var r = buildResult(it.plate,reg,now,it.vtype,it.sgqk,it.vin,it.code,it.km);
 		var ll = lightLevel(r.next.daysLeft);
 		if(ll==3) nRed++; elseif(ll==2) nYellow++; elseif(ll==1) nBlue++; else nOk++;
 		if(r.dispo.eligible) nDispo++;
@@ -1159,7 +1267,7 @@ var doExportList = function(){
 	var savePath = fsys.dlg.save("CSV 文件|*.csv|所有文件|*.*","导出车辆跟踪库",winform.hwnd);
 	if(!savePath){ busy(false); return; }
 	if( !string.endWith( string.lower(savePath), ".csv" ) ) savePath = savePath ++ ".csv";
-	var out = { "车牌号,车架号,编号,登记日期,公里数,免检新政,车龄,下次截止,方式,状态,处置" };
+	var out = { "车牌号,车架号,编号,登记日期,公里数,车辆类型,事故情况,车龄,下次截止,方式,状态,处置" };
 	var now = nowCached();
 	for(i=1;#list;1){
 		var it = list[i];
@@ -1169,8 +1277,7 @@ var doExportList = function(){
 			continue;
 		}
 		var rule;
-		if(it.newRules) rule = "非营运小微型/摩托车"; else rule = "面包车及其他";
-		var r = buildResult(it.plate,reg,now,it.newRules,rule,it.vin,it.code,it.km);
+		var r = buildResult(it.plate,reg,now,it.vtype,it.sgqk,it.vin,it.code,it.km);
 		var way;
 		if(r.next.online) way = "上线检测"; else way = "免检领标";
 		var st2;
@@ -1179,7 +1286,7 @@ var doExportList = function(){
 		var dp;
 		if(r.dispo.eligible) dp = "可处置"; else dp = "未到";
 		table.push(out, it.plate ++ "," ++ it.vin ++ "," ++ it.code ++ "," ++ it.dateStr ++ "," ++ it.km ++ ","
-			++ (it.newRules and "1" or "0") ++ "," ++ r.ageYears ++ "," ++ fmtDate(r.next.date) ++ "," ++ way ++ "," ++ st2 ++ "," ++ dp);
+			++ vtShort(it.vtype) ++ "," ++ ( (it.sgqk==1) and "有伤亡事故/非法改装" or "无" ) ++ "," ++ r.ageYears ++ "," ++ fmtDate(r.next.date) ++ "," ++ way ++ "," ++ st2 ++ "," ++ dp);
 	}
 	var str = table.concat(out,'\r\n');
 	str = string.char(0xEF,0xBB,0xBF) ++ str; //BOM，Excel 打开不乱码
@@ -1314,7 +1421,7 @@ exportExcel = function(savePath,title,nowStr,results,showHistory){
 			//行3：下次年检截止 + 窗口
 			sheet.Cells.Item(r,1).Value2 = "下次年检截止";
 			sheet.Cells.Item(r,2).Value2 = fmtDate(v.next.date);
-			sheet.Cells.Item(r,3).Value2 = "注册后第" ++ v.next.n ++ "年";
+			sheet.Cells.Item(r,3).Value2 = "注册后" ++ v.next.label;
 			sheet.Cells.Item(r,4).Value2 = "窗口 " ++ fmtDate(v.next.ws) ++ " 至 " ++ fmtDate(v.next.date);
 			sheet.Range("D" ++ r ++ ":G" ++ r).Merge();
 			sheet.Cells.Item(r,1).Font.Bold = true;
@@ -1384,7 +1491,7 @@ exportExcel = function(savePath,title,nowStr,results,showHistory){
 				for(k=1;#v.hist;1){
 					var h = v.hist[k];
 					sheet.Cells.Item(r,1).Value2 = h.d;
-					sheet.Cells.Item(r,2).Value2 = "第" ++ h.n ++ "年";
+					sheet.Cells.Item(r,2).Value2 = h.label;
 					var w;
 					if(h.online) w = "上线检测"; else w = "免检·申领标志";
 					sheet.Cells.Item(r,3).Value2 = w;
@@ -1422,8 +1529,7 @@ var buildRemind = function(){
 		var reg = parseDate(list[i].dateStr);
 		if(!reg) continue;
 		var rule;
-		if(list[i].newRules) rule = "非营运小微型/摩托车"; else rule = "面包车及其他";
-		var r = buildResult(list[i].plate,reg,now,list[i].newRules,rule,list[i].vin,list[i].code,list[i].km);
+		var r = buildResult(list[i].plate,reg,now,list[i].vtype,list[i].sgqk,list[i].vin,list[i].code,list[i].km);
 		if(r.next and r.next.daysLeft <= 92){
 			var ll = lightLevel(r.next.daysLeft);
 			var statusCell;
@@ -1477,8 +1583,7 @@ wb.external = {
 		if(!reg){ toast("err","该记录登记日期无法识别"); return; }
 		var now = nowCached();
 		var rule;
-		if(h.newRules) rule = "非营运小微型/摩托车"; else rule = "面包车及其他";
-		var r = buildResult(h.plate,reg,now,h.newRules,rule,h.vin,h.code,h.km);
+		var r = buildResult(h.plate,reg,now,h.vtype,h.sgqk,h.vin,h.code,h.km);
 		gResults = { r };
 		gTitle = "历史查询回看";
 		gNowStr = "查询时间：" ++ h.time ++ " · 登记日期 " ++ h.dateStr;
