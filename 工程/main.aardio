@@ -15,6 +15,8 @@ import inet.whttp;
 import time;
 import math;
 import win.reg;
+import win.util.tray;
+import win.ui.menu;
 
 //开机自启（注册表 Run）拉起时，进程工作目录是 C:\Windows\System32，
 //必须先切到 exe 所在目录，否则下面所有 io.fullpath("/...") 都会指到系统目录里去
@@ -35,7 +37,7 @@ if(winW < 940) winW = 940;
 if(winH < 620) winH = 620;
 
 /*DSG{{*/
-var winform = win.form(text="车辆年检助手";right=winW;bottom=winH;bgcolor=16250357;border="dialog frame";max=false;min=false)
+var winform = win.form(text="车辆年检助手";right=winW;bottom=winH;bgcolor=16250357;border="dialog frame";max=false;min=true)
 /*}}*/
 
 //---------- 内嵌浏览器（整个界面由网页绘制） ----------
@@ -1559,6 +1561,88 @@ wb.external = {
 		if(err){ toast("err","设置失败：" ++ err); send({ type="autoRun"; on=isAutoRun() }); }
 	};
 };
+
+//---------- 托盘图标与最小化到托盘 ----------
+
+var WM_TRAYCLICK = 0xACCF; //托盘库默认回调消息（冷门值，避开 WM_APP 区，防止与 WebView2 内部消息冲突）
+
+//托盘图标（图标用程序默认图标）
+var trayIcon = win.util.tray(winform, null, "车辆年检助手 - 双击打开，右键菜单");
+
+//把主界面重新显示出来（从托盘恢复）
+var showMain = function(){
+	var err;
+	try{
+		winform.show();                    //显示并还原窗口
+		win.setForeground(winform.hwnd);   //置前
+		wb.adjust();                       //重算 WebView2 视口，防止恢复后布局错位
+	}
+	catch(e){ err = tostring(e); }
+};
+
+//隐藏窗口到托盘（任务栏条目同时消失，只留托盘图标）
+var hideToTray = function(tipOn){
+	var err;
+	try{
+		winform.show(false);
+		if(tipOn){
+			try{ trayIcon.pop("程序已最小化到托盘，双击图标可恢复。", "车辆年检助手", 1); }
+			catch(e){ }
+		}
+	}
+	catch(e){ err = tostring(e); }
+	if(err){ winform.msgboxErr("最小化到托盘失败：" ++ err); }
+};
+
+//退出程序（先删托盘图标，避免残留幽灵图标）
+var quitApp = function(){
+	try{ trayIcon.delete(); }catch(e){ }
+	winform.close();
+};
+
+//托盘右键菜单（第 3 项为开机自启，用于同步勾选状态）
+//注意：必须用 popmenu（弹出菜单）；win.ui.menu 是 SetMenu 挂到窗口上的菜单栏，会常驻显示在标题栏下
+var trayMenu = win.ui.popmenu(winform);
+trayMenu.addTable({
+	{ "显示主界面"; function(id){ showMain(); } };
+	{ };
+	{ "开机自动启动"; function(id){
+		var err;
+		try{ doSetAutoRun(not isAutoRun()); }catch(e){ err = tostring(e); }
+		if(err){ winform.msgboxErr("设置开机自启失败：" ++ err); }
+	} };
+	{ };
+	{ "退出程序"; function(id){ quitApp(); } };
+});
+
+var popTrayMenu = function(){
+	try{ trayMenu.check(3, isAutoRun()); }catch(e){ }
+	try{ trayMenu.popup(); }catch(e){ }
+};
+
+//窗口消息：托盘图标点击 / 拦截最小化
+winform.wndproc = function(hwnd,message,wParam,lParam){
+	if(message == WM_TRAYCLICK){
+		var lp = tonumber(lParam);
+		if(lp == 0x202/*_WM_LBUTTONUP*/ or lp == 0x203/*_WM_LBUTTONDBLCLK*/){
+			showMain();
+		}
+		elseif(lp == 0x205/*_WM_RBUTTONUP*/){
+			popTrayMenu();
+		}
+		return 0;
+	}
+	//点最小化按钮：不进任务栏，直接隐藏到托盘
+	if(message == 0x0112/*_WM_SYSCOMMAND*/ and tonumber(wParam) == 0xF020/*_SC_MINIMIZE*/){
+		hideToTray(true);
+		return 0;
+	}
+	//兜底：其他方式触发的最小化（如 Win+下方向键、任务栏右键最小化）
+	if(message == 0x0005/*_WM_SIZE*/ and tonumber(wParam) == 1/*_SIZE_MINIMIZED*/){
+		hideToTray(false);
+		return 0;
+	}
+}
 
 //---------- 启动 ----------
 
