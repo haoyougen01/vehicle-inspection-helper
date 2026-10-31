@@ -8,6 +8,8 @@
 [![最新版本](https://img.shields.io/github/v/release/haoyougen01/vehicle-inspection-helper?label=release&color=blue)](https://github.com/haoyougen01/vehicle-inspection-helper/releases/latest)
 
 > **直接下载**：[Releases → VehicleInspectionHelper-v1.0.0-win64.zip](https://github.com/haoyougen01/vehicle-inspection-helper/releases/latest)（解压双击即用，免安装）
+>
+> **使用手册**：[Wiki](https://github.com/haoyougen01/vehicle-inspection-helper/wiki) — 快速开始 ｜ 功能说明 ｜ 年检规则 ｜ 数据与备份 ｜ 常见问题 ｜ 从源码构建
 
 ---
 
@@ -83,6 +85,7 @@
 界面文件通过 `var UI_HTML = $"~/ui/index.html";` 在编译期内嵌，因此**改完 index.html 必须重新发布**；程序启动时还会把界面写到 `dist/ui/index.html` 供 WebView2 加载。
 
 更详细的架构、通信协议、数据格式与 22 条踩坑经验见 [文档/开发文档.md](文档/开发文档.md)。
+面向使用者的操作手册（功能逐项说明、年检规则、数据备份、常见问题）见 [Wiki](https://github.com/haoyougen01/vehicle-inspection-helper/wiki)。
 把本仓库推到 GitHub（含认证方式、国内网络、常见报错）见 [文档/发布到GitHub.md](文档/发布到GitHub.md)。
 
 ## 数据与隐私
