@@ -40,6 +40,15 @@ if(winH < 620) winH = 620;
 var winform = win.form(text="车辆年检助手";right=winW;bottom=winH;bgcolor=16250357;border="dialog frame";max=false;min=true)
 /*}}*/
 
+//---------- 程序图标（编译期把 app.ico 内嵌进 exe，运行时无需外部 ico 文件） ----------
+import win.image;
+var appHIcon32 = null;
+var appHIcon16 = null;
+try{ appHIcon32 = win.image.createIcon($"~/app.ico",true,32,32); }catch(e){ }
+try{ appHIcon16 = win.image.createIcon($"~/app.ico",true,16,32); }catch(e){ }
+//标题栏 / 任务栏 / Alt+Tab 统一用程序图标
+try{ if(appHIcon32) winform.icon = appHIcon32; }catch(e){ }
+
 //---------- 内嵌浏览器（整个界面由网页绘制） ----------
 var wb = web.view(winform);
 try{
@@ -1566,8 +1575,8 @@ wb.external = {
 
 var WM_TRAYCLICK = 0xACCF; //托盘库默认回调消息（冷门值，避开 WM_APP 区，防止与 WebView2 内部消息冲突）
 
-//托盘图标（图标用程序默认图标）
-var trayIcon = win.util.tray(winform, null, "车辆年检助手 - 双击打开，右键菜单");
+//托盘图标（取内嵌 app.ico 的 16px 版本，与 exe 图标一致）
+var trayIcon = win.util.tray(winform, appHIcon16, "车辆年检助手 - 双击打开，右键菜单");
 
 //把主界面重新显示出来（从托盘恢复）
 var showMain = function(){
