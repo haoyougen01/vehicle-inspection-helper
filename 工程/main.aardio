@@ -543,20 +543,41 @@ var readCsvRows = function(path){
 	return rows;
 }
 
-//车辆类型文本/编号 → 类型编号（识别不了返回 0）
-var vtCodeOf = function(v){
+//车辆类型文本/编号 → 12123 规定的 7 类车型编号（识别不了返回 0）
+//  v: 行驶证"车辆类型"文本（如"小型普通客车""轻型栏板货车"）或数字编号（1-7）
+//  nature: 使用性质文本（如"营运/非营运/货运"），可选，用于无车型文本时辅助判定
+var vtCodeOf = function(v, nature){
 	var t = trimStr(v);
-	if(!#t) return 0;
+	var nat = trimStr(nature or "");
+	// 非营运（"非营运/营转非"）一律不算营运类
+	var nonop = string.match(t,"非营运") or string.match(nat,"非营运") or string.match(nat,"营转非");
+	// 营运类判定（车型文本或使用性质里的 营运/客运/出租/公交，排除"非营运"），影响客车归类
+	var op = !nonop and (
+		string.match(t,"营运") or string.match(t,"客运") or string.match(t,"出租") or string.match(t,"公交")
+		or (#nat and (string.match(nat,"营运") or string.match(nat,"客运") or string.match(nat,"出租") or string.match(nat,"公交")))
+	);
+	// 1) 直接给数字编号
 	var num = tonumber(t);
 	if(num and num >= 1 and num <= 7) return num;
-	if( string.match(t,"面包车") ) return 6;
-	if( string.match(t,"摩托") ) return 4;
-	if( string.match(t,"大型轿车") ) return 7;
-	if( string.match(t,"营运") ) return 1;
-	if( string.match(t,"货车") or string.match(t,"大中型") ) return 2;
-	if( string.match(t,"其他") ) return 5;
-	if( string.match(t,"小微型") or string.match(t,"载客汽车") ) return 3;
-	return 0;
+	// 2) 按行驶证"车辆类型"文本判断（优先级从高到低，覆盖 12123 常见写法）
+	if( string.match(t,"面包") ) return 6;                                  // 面包车
+	if( string.match(t,"大型轿车") ) return 7;                              // 非营运大型轿车
+	if( string.match(t,"摩托") ) return 4;                                  // 摩托车
+	if( string.match(t,"货车") or string.match(t,"货") or string.match(t,"牵引") ){
+		if( string.match(t,"专项") ) return 5;                              // 专项作业车单列"其他"
+		return 2;                                                           // 货车·大中型客车
+	}
+	if( string.match(t,"专项作业") or string.match(t,"其他") ) return 5;     // 其他
+	if( string.match(t,"客车") or string.match(t,"轿车") or string.match(t,"载客")
+	 or string.match(t,"小型") or string.match(t,"微型") ){
+		if( op ) return 1;                                                  // 营运/客运 → 营运客车
+		if( string.match(t,"大型") or string.match(t,"中型") ) return 2;     // 大中型客车
+		return 3;                                                           // 小微型客车
+	}
+	// 3) 仅有使用性质、无车型文本时，按性质推断
+	if( op ) return 1;                                                       // 营运默认归为营运客车（避免误判为免检小微型）
+	if( string.match(nat,"货运") or string.match(nat,"危运") ) return 2;     // 货运→货车
+	return 0;                                                               // 无法判断
 }
 
 //从数据行提取 {plate=..;dateStr=..} 列表，自动识别表头列
@@ -568,6 +589,7 @@ var extractVehicles = function(rows){
 	var kmCol = 0;
 	var vtCol = 0;
 	var sgCol = 0;
+	var natureCol = 0;
 	for(r=1;math.min(3,#rows);1){
 		var arr = rows[r];
 		for(c=1;#arr;1){
@@ -579,6 +601,7 @@ var extractVehicles = function(rows){
 			if( string.match(h,"公里") or string.match(h,"里程") ) kmCol = c;
 			if( string.match(h,"车辆类型") or string.match(h,"@车型") ) vtCol = c;
 			if( string.match(h,"事故") or string.match(h,"违法") ) sgCol = c;
+			if( string.match(h,"使用性质") or string.match(h,"性质") ) natureCol = c;
 		}
 	}
 	var list = {};
@@ -591,10 +614,14 @@ var extractVehicles = function(rows){
 		var km = "";
 		var vt = 0;
 		var sg = 0;
+		var nature = "";
 		if(vinCol > 0 and vinCol <= #arr) vin = trimStr(arr[vinCol]);
 		if(codeCol > 0 and codeCol <= #arr) code = trimStr(arr[codeCol]);
 		if(kmCol > 0 and kmCol <= #arr) km = trimStr(arr[kmCol]);
-		if(vtCol > 0 and vtCol <= #arr) vt = vtCodeOf( trimStr(arr[vtCol]) );
+		if(natureCol > 0 and natureCol <= #arr) nature = trimStr(arr[natureCol]);
+		// 12123 车型判断：优先用"车辆类型"文本，其次用"使用性质"辅助推断
+		if(vtCol > 0 and vtCol <= #arr) vt = vtCodeOf( trimStr(arr[vtCol]), nature );
+		elseif(natureCol > 0 and natureCol <= #arr) vt = vtCodeOf( "", nature );
 		if(sgCol > 0 and sgCol <= #arr){
 			var sv = trimStr(arr[sgCol]);
 			if( string.match(sv,"有") or string.match(sv,"是") or sv == "1" ) sg = 1;
