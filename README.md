@@ -7,7 +7,7 @@
 [![许可](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![最新版本](https://img.shields.io/github/v/release/haoyougen01/vehicle-inspection-helper?label=release&color=blue)](https://github.com/haoyougen01/vehicle-inspection-helper/releases/latest)
 
-> **直接下载**：[Releases → 车辆年检助手.exe](https://github.com/haoyougen01/vehicle-inspection-helper/releases/latest)（免安装，双击即用）
+> **直接下载**：[Releases → VehicleInspectionHelper-v1.0.0-win64.zip](https://github.com/haoyougen01/vehicle-inspection-helper/releases/latest)（解压双击即用，免安装）
 
 ---
 
@@ -27,12 +27,13 @@
 - 六格总览：总数、已逾期、2 个月内、3 个月内、正常、可处置；
 - Excel / CSV 批量导入（表头关键字智能识别列，日期格式宽容）；
 - 一键导出跟踪库或总览到 Excel（Excel 或 WPS 均可，带样式）；
-- 启动时自动弹出年检提醒（含开机自启开关）。
+- 启动时自动弹出年检提醒（含开机自启开关，注册表 Run 项，不写快捷方式）；
+- 最小化到系统托盘：点最小化或关闭按钮不退出，托盘图标双击恢复，右键菜单可"显示主界面 / 开关开机自启 / 退出程序"。
 
 ## 快速开始
 
-1. **开箱即用**：从 [Releases](https://github.com/haoyougen01/vehicle-inspection-helper/releases/latest) 下载 `车辆年检助手.exe`；或按下方「构建」自行编译。放到任意目录（建议单独建文件夹）；
-2. 双击运行。首次启动会在 exe 同目录自动生成：
+1. **开箱即用**：从 [Releases](https://github.com/haoyougen01/vehicle-inspection-helper/releases/latest) 下载 `VehicleInspectionHelper-v1.0.0-win64.zip`，解压到任意文件夹（建议单独建一个，如 `D:\车辆年检助手`）；或按下方「构建」自行编译；
+2. 双击 `车辆年检助手.exe` 运行。首次启动会在 exe 同目录自动生成：
    - `车辆跟踪库.csv` —— 车辆台账
    - `查询历史.csv` —— 临时查询留痕
    - `ui/index.html` —— 界面文件（自动重建，勿手改）
@@ -81,7 +82,7 @@
 
 界面文件通过 `var UI_HTML = $"~/ui/index.html";` 在编译期内嵌，因此**改完 index.html 必须重新发布**；程序启动时还会把界面写到 `dist/ui/index.html` 供 WebView2 加载。
 
-更详细的架构、通信协议、数据格式与 14 条踩坑经验见 [文档/开发文档.md](文档/开发文档.md)。
+更详细的架构、通信协议、数据格式与 17 条踩坑经验见 [文档/开发文档.md](文档/开发文档.md)。
 把本仓库推到 GitHub（含认证方式、国内网络、常见报错）见 [文档/发布到GitHub.md](文档/发布到GitHub.md)。
 
 ## 数据与隐私
