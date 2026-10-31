@@ -1517,7 +1517,7 @@ exportExcel = function(savePath,title,nowStr,results,showHistory){
 
 			//20年检验节点：自产权登记日起（勾选时导出）
 			if( showHistory and #v.hist ){
-				var histTitle = "20年检验节点 · 自产权登记日起";
+				var histTitle = "20年内年检情况（自注册登记日起）";
 				if(v.histEndStr) histTitle = histTitle ++ "（" ++ v.regStr ++ " 至 " ++ v.histEndStr ++ "）";
 				sheet.Cells.Item(r,1).Value2 = histTitle;
 				sheet.Range("A" ++ r ++ ":G" ++ r).Merge();
