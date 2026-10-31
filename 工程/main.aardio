@@ -795,18 +795,26 @@ var loadTracking = function(){
 	if( string.left(str,3) == string.char(0xEF,0xBB,0xBF) ) str = string.sub(str,4);
 	if( #str and !isUtf8Bytes(str) ) str = string.fromto(str,0,65001);
 	var lines = string.split(str,'\n');
+	if(#lines < 2) return {};
+	// 向后兼容：表头含"免检新政"为旧 6 列格式（末列为免检标志 1/0）；
+	// 表头含"车辆类型"为新格式（第 6 列=车辆类型 1-7，第 7 列=事故标志）
+	var oldFmt = string.match(trimStr(lines[1]),"免检新政");
 	var list = {};
 	for(i=2;#lines;1){ //跳过表头
 		var line = trimStr(lines[i]);
 		if(#line){
 			var arr = string.split(line,",");
 			if(#arr>=6){
-				//列：车牌号,车架号,编号,登记日期,公里数,车辆类型,事故标志
-				//兼容旧 6 列格式（第 6 列为 免检新政 1/0）：1 → 小微型客车(3)，0 → 面包车(6)
-				var vt = tonumber(trimStr(arr[6]));
-				var sg = tonumber(trimStr(arr[7])) or 0;
-				if(!vt or vt < 1 or vt > 7){
+				var vt, sg = 3, 0;
+				if(oldFmt){
+					// 旧格式：末列=免检新政。1 → 小微型客车(3)免检；0 → 面包车(6)非免检
 					vt = (trimStr(arr[6]) == "1") and 3 or 6;
+					sg = 0;
+				}
+				else{
+					vt = tonumber(trimStr(arr[6]));
+					sg = tonumber(trimStr(arr[7])) or 0;
+					if(!vt or vt < 1 or vt > 7) vt = 3;
 				}
 				table.push(list,{ plate=trimStr(arr[1]); vin=trimStr(arr[2]); code=trimStr(arr[3]);
 					dateStr=trimStr(arr[4]); km=trimStr(arr[5]); vtype=vt; sgqk=sg });
@@ -828,17 +836,24 @@ var loadHistory = function(){
 	if( string.left(str,3) == string.char(0xEF,0xBB,0xBF) ) str = string.sub(str,4);
 	if( #str and !isUtf8Bytes(str) ) str = string.fromto(str,0,65001);
 	var lines = splitLines(str);
+	if(#lines < 2) return {};
+	// 向后兼容：表头含"免检新政"为旧 7 列格式（末列为免检标志 1/0）
+	var oldFmt = string.match(trimStr(lines[1]),"免检新政");
 	var list = {};
 	for(i=2;#lines;1){
 		var line = trimStr(lines[i]);
 		if(#line){
 			var arr = string.split(line,",");
 			if(#arr>=7){
-				//兼容旧 7 列（第 7 列为 免检新政 1/0）：1 → 3 类，0 → 6 类
-				var vt = tonumber(trimStr(arr[7]));
-				var sg = tonumber(trimStr(arr[8])) or 0;
-				if(!vt or vt < 1 or vt > 7){
+				var vt, sg = 3, 0;
+				if(oldFmt){
 					vt = (trimStr(arr[7]) == "1") and 3 or 6;
+					sg = 0;
+				}
+				else{
+					vt = tonumber(trimStr(arr[7]));
+					sg = tonumber(trimStr(arr[8])) or 0;
+					if(!vt or vt < 1 or vt > 7) vt = 3;
 				}
 				table.push(list,{ time=trimStr(arr[1]); plate=trimStr(arr[2]); vin=trimStr(arr[3]);
 					code=trimStr(arr[4]); dateStr=trimStr(arr[5]); km=trimStr(arr[6]);
