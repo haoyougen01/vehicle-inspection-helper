@@ -14,6 +14,13 @@ import com;
 import inet.whttp;
 import time;
 import math;
+import win.reg;
+
+//开机自启（注册表 Run）拉起时，进程工作目录是 C:\Windows\System32，
+//必须先切到 exe 所在目录，否则下面所有 io.fullpath("/...") 都会指到系统目录里去
+var chdirErr = null;
+try{ io.chdir( io.splitpath(io._exepath).dir ); }
+catch(e){ chdirErr = tostring(e); }
 
 var UI_HTML = $"~/ui/index.html";
 
@@ -1173,48 +1180,43 @@ var doExportList = function(){
 	busy(false);
 }
 
-//---------- 开机自启动 ----------
+//---------- 开机自启动（写注册表 Run 项，不用 COM 建快捷方式，避免被杀软拦截） ----------
 
-var getStartupLnk = function(){
-	var lnk = null;
-	try{
-		var ws = com.CreateObject("WScript.Shell");
-		lnk = ws.SpecialFolders("Startup") ++ "\车辆年检助手.lnk"; //try内不可return
-	}
-	catch(e){ lnk = null; }
-	return lnk;
+var RUN_KEY  = "HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run";
+var RUN_NAME = "车辆年检助手";
+
+var runCmdLine = function(){
+	return '"' ++ io._exepath ++ '"';
 }
 
 var isAutoRun = function(){
-	var lnk = getStartupLnk();
-	if(!lnk) return false;
-	return io.exist(lnk) and true or false;
+	var v = null;
+	try{ v = win.reg.query(RUN_KEY, RUN_NAME); }
+	catch(e){ v = null; }
+	if( v and #tostring(v) > 0 ) return true;
+	return false;
 }
 
 var doSetAutoRun = function(on){
-	var lnk = getStartupLnk();
-	if(!lnk){
-		toast("err","无法获取启动文件夹路径");
-		send({ type="autoRun"; on=isAutoRun() });
-		return;
-	}
-	if(on){
-		var okS, errS;
-		try{
-			var ws = com.CreateObject("WScript.Shell");
-			var s = ws.CreateShortcut(lnk);
-			s.TargetPath = io.exepath();
-			s.WorkingDirectory = io.splitpath(io.exepath()).dir;
-			s.Save();
-			okS = true;
+	var err = null;
+	try{
+		var rg = win.reg(RUN_KEY, false); //false=键不存在时创建
+		if(!rg){
+			err = "无法打开注册表 Run 项";
 		}
-		catch(e){ errS = tostring(e); }
-		if(okS) toast("ok","已开启开机自启动");
-		else toast("err","创建开机启动失败：" ++ (errS or "未知错误"));
+		else{
+			if(on) rg.setValue(RUN_NAME, runCmdLine());
+			else rg.delValue(RUN_NAME);
+			rg.close();
+		}
+	}
+	catch(e){ err = tostring(e); }
+	if(err){
+		toast("err","设置开机自启失败：" ++ err);
 	}
 	else{
-		try{ io.remove(lnk); }catch(e){ }
-		toast("ok","已关闭开机自启动");
+		if(on) toast("ok","已开启开机自启动");
+		else toast("ok","已关闭开机自启动");
 	}
 	send({ type="autoRun"; on=isAutoRun() });
 }
