@@ -1,0 +1,26 @@
+# --- aardio 构建产物 ---
+工程/.build/
+工程/dist/*.exe
+*.exe
+*.dll
+
+# --- 运行时生成 ---
+工程/dist/ui/
+工程/dist/导入调试日志.txt
+工程/dist/年检预览.html
+
+# 说明：工程/dist/车辆跟踪库.csv 与 查询历史.csv 是内置的【虚构演示数据】，
+# 故意纳入版本库，方便克隆后直接运行看到效果；若你在本地录入了真实数据，
+# 提交前请自行 `git update-index --skip-worktree` 或检查 diff。
+
+# --- 临时/调试 ---
+*.bmp
+*.tmp
+测试跟踪库临时.csv
+测试导出临时.xlsx
+导入调试日志.txt
+
+# --- 系统 ---
+Thumbs.db
+desktop.ini
+.DS_Store

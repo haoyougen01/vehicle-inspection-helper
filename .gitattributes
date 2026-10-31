@@ -1,0 +1,17 @@
+# 统一行尾，避免 Windows/Linux 克隆后 aardio 源码与 CSV 被自动转换
+* text=auto eol=lf
+
+# aardio 源码与数据文件保持 CRLF（程序按 CRLF 写入，保持一致性）
+*.aardio text eol=crlf
+*.aproj   text eol=crlf
+*.csv     text eol=crlf
+
+# 二进制
+*.exe binary
+*.dll binary
+*.xlsx binary
+*.zip binary
+*.png binary
+*.jpg binary
+*.bmp binary
+*.ico binary

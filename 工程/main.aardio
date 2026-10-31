@@ -1,0 +1,1578 @@
+//车辆年检助手 V5（aardio + WebView2 苹果风界版）
+//两大功能模块：① 临时车辆查询（手动 / 导入 Excel 批量 / 导出） ② 存量车跟踪管理（可视化增删改查）
+//显示：下次年检截止、办理方式、当年与下一年年检信息；可勾选自登记日起 20 年全部检验节点
+//提醒：开机自启动(可选)；启动时提醒 3 个月内到期或已逾期车辆
+//灯光：临近3个月蓝灯闪烁、临近2个月黄灯闪烁、临近1个月或逾期红灯闪烁
+//规则依据：公交管〔2022〕295号（2022-10-01施行）
+
+import win.ui;
+import win;
+import web.view;
+import web.json;
+import fsys.dlg;
+import com;
+import inet.whttp;
+import time;
+import math;
+
+var UI_HTML = $"~/ui/index.html";
+
+//窗口尺寸按屏幕自适应（须在创建窗体前算好，避免运行时 resize）
+var scrW, scrH;
+try{ scrW = ::GetSystemMetrics(0); scrH = ::GetSystemMetrics(1); }catch(e){ scrW = 1366; scrH = 768; }
+if(!scrW or scrW < 800) scrW = 1366;
+if(!scrH or scrH < 600) scrH = 768;
+var winW = math.min(1160, scrW - 80);
+var winH = math.min(780, scrH - 100);
+if(winW < 940) winW = 940;
+if(winH < 620) winH = 620;
+
+/*DSG{{*/
+var winform = win.form(text="车辆年检助手";right=winW;bottom=winH;bgcolor=16250357;border="dialog frame";max=false;min=false)
+/*}}*/
+
+//---------- 内嵌浏览器（整个界面由网页绘制） ----------
+var wb = web.view(winform);
+try{
+	wb.enableDefaultContextMenus = false;
+	wb.enableDevTools = false;
+}
+catch(e){ }
+
+//界面资源写到程序目录后加载（exe 内已内嵌 HTML 源码）
+//每次启动都重建：既保证界面随 exe 更新，也避免 WebView2 缓存旧页面
+var uiPath = io.fullpath("/ui/index.html");
+var saveUi = function(){
+	var dir = io.fullpath("/ui");
+	if( !io.exist(dir) ){
+		try{ io.mkdir(dir); }catch(e){ }
+	}
+	string.save(uiPath, UI_HTML);
+}
+var uiSaved, uiErr;
+try{
+	saveUi();
+	uiSaved = true;
+}
+catch(e){ uiErr = tostring(e); }
+
+//---------- 基础工具 ----------
+
+var trimStr = function(s){
+	return string.trim( tostring(s) );
+}
+
+//稳健分行：不用字符串字面量写换行（避免源码换行/转义歧义），\r 由 trimStr 清掉
+var NL = string.char(10);
+var splitLines = function(str){
+	var out = {};
+	if(!str) return out;
+	var len = #str;
+	var start = 1;
+	var i = 1;
+	while(i <= len){
+		if( string.sub(str,i,i) == NL ){
+			var seg = string.sub(str, start, i-1);
+			if( string.right(seg,1) == string.char(13) ) seg = string.sub(seg,1,#seg-1);
+			table.push(out, seg);
+			start = i + 1;
+		}
+		i = i + 1;
+	}
+	if(start <= len){
+		var seg = string.sub(str, start, len);
+		if( string.right(seg,1) == string.char(13) ) seg = string.sub(seg,1,#seg-1);
+		table.push(out, seg);
+	}
+	return out;
+}
+
+//---------- 导入调试日志（排障用，常驻无害） ----------
+var gDbgLines = {};
+var dbg = function(s){
+	table.push(gDbgLines, tostring(time(),"%H:%M:%S ") ++ s);
+	string.save( io.fullpath("/导入调试日志.txt"), table.concat(gDbgLines,'\r\n') );
+}
+
+var parseDate = function(str){
+	str = tostring(str);
+	var y,m,d = string.match(str,"(\d+)[^\d]+(\d+)[^\d]+(\d+)");
+	if(!y) return null;
+	y = tonumber(y); m = tonumber(m); d = tonumber(d);
+	if( y < 1980 or y > 2100 or m < 1 or m > 12 or d < 1 or d > 31 ) return null;
+	var tm = time( string.format("%04d/%02d/%02d",y,m,d), "%Y/%m/%d" );
+	if(!tm) return null;
+	if( tm.month != m or tm.day != d ) return null; //排除2月30等无效日期
+	return tm;
+}
+
+//登记日期 + n 年（闰2月29自动回退28日）
+var mkTime = function(reg,n){
+	var y = reg.year + n;
+	var m = reg.month;
+	var d = reg.day;
+	if( m == 2 and d == 29 ){
+		var leap = (y%4==0 and y%100!=0) or (y%400==0);
+		if(!leap) d = 28;
+	}
+	return time( string.format("%04d/%02d/%02d",y,m,d), "%Y/%m/%d" );
+}
+
+var fmtDate = function(tm){
+	return tostring(tm,"%Y-%m-%d");
+}
+
+//数值时间戳统一成秒（aardio 可能是 13 位毫秒）
+var unixSec = function(t){
+	var v = tonumber(t);
+	if(!v) return 0;
+	if(v > 1e11) v = v / 1000;
+	return v;
+}
+
+//联网获取北京时间（失败回退本机时间），返回 时间对象,是否联网
+var getNetworkNow = function(){
+	var apis = {
+		{ url="https://acs.m.taobao.com/gw/mtop.common.getTimestamp/"; pat=`"t".{0,3}"(\d+)"` };
+		{ url="https://f.m.suning.com/api/ct.do"; pat=`"currentTime".{0,3}(\d+)` };
+	};
+	var ret, isNet;
+	for(i=1;#apis;1){
+		var hit = false;
+		try{
+			var whttp = inet.whttp();
+			var str = whttp.get(apis[i].url);
+			whttp.close();
+			if(str){
+				var ts = string.match(str, apis[i].pat);
+				if(ts){
+					ts = tonumber(ts);
+					if(ts > 1e12) ts = ts/1000;
+					if(ts > 1e9){ ret = time(ts); isNet = true; hit = true; } //try内不可return/break，赋值标记
+				}
+			}
+		}
+		catch(e){ }
+		if(hit) break; //break必须在try外
+	}
+	if(isNet) return ret, true;
+	return time(), false;
+}
+
+//带缓存的当前时间（2分钟内复用，避免频繁联网拖慢界面）
+var gNowObj = null;
+var gNowNet = false;
+var gNowTick = 0;
+var nowCached = function(force){
+	if( gNowObj and !force and ( unixSec(time()) - gNowTick ) < 120 ) return gNowObj, gNowNet;
+	var t, net = getNetworkNow();
+	gNowObj = t; gNowNet = net; gNowTick = unixSec(time());
+	return gNowObj, gNowNet;
+}
+
+//---------- 年检规则计算 ----------
+
+//生成全部检验节点 {n=第几年;date=截止日;online=是否上线}
+var allNodes = function(reg,newRules){
+	var list = {};
+	var spec, baseY;
+	if(newRules){
+		spec = {2;4;6;8;10};
+		baseY = 10;
+	}
+	else{
+		spec = {2;4;6};
+		baseY = 6;
+	}
+	var isOnline = function(n){
+		if(!newRules) return true;
+		return (n==6 or n==10);
+	}
+	for(i=1;#spec;1){
+		table.push(list,{ n=spec[i]; date=mkTime(reg,spec[i]); online=isOnline(spec[i]) });
+	}
+	var n = baseY + 1;
+	while(n <= 60){
+		table.push(list,{ n=n; date=mkTime(reg,n); online=true });
+		n++;
+	}
+	return list;
+}
+
+//清理里程输入：支持 "85000"、"8.5万" 等写法，返回数字字符串（无效返回空串）
+//坑：必须定义在 buildResult 之前——exe 编译时前向引用的名字会解析成全局变量（null）
+var vin_km_clean = function(s){
+	s = tostring(s or "");
+	s = trimStr(s);
+	if(!#s) return "";
+	var num = string.match(s,"(\d+\.?\d*)");
+	if(!num) return "";
+	var wan = string.match(s,"万") or string.match(string.upper(s),"W");
+	if(wan) num = tonumber(num) * 10000;
+	num = tonumber(num);
+	if(!num) return "";
+	return tostring(math.floor(num));
+}
+
+//单台车计算，返回结构化结果
+var buildResult = function(plate,reg,now,newRules,ruleLabel,vin,code,km){
+	var nodes = allNodes(reg,newRules);
+	var next = null;
+	var curRows = {};
+	var nextRows = {};
+	var hist = {};
+	var curY = now.year;
+	var nextY = now.year + 1;
+	//20年节点区间：自产权登记日起算，至登记日+20年（含尚未到期的未来节点）
+	var histEnd = mkTime(reg,20);
+
+	var nodeStatus = function(d,ws){
+		if( tonumber(d) < tonumber(now) ) return "已过期";
+		if( tonumber(now) >= tonumber(ws) ) return "窗口期内·可办理";
+		return "未到办理窗口";
+	}
+	var rowText = function(nd,ws){
+		var s;
+		if(nd.online) s = "上线检测"; else s = "免检·申领标志";
+		return "第" ++ nd.n ++ "年 · 截止" ++ fmtDate(nd.date) ++ " · " ++ s ++ " · " ++ nodeStatus(nd.date,ws);
+	}
+
+	for(i=1;#nodes;1){
+		var nd = nodes[i];
+		var d = nd.date;
+		var ws = time( tostring(d,"%Y/%m/%d"), "%Y/%m/%d" );
+		ws.addMonths(-3);
+		var daysLeft = math.floor( ( tonumber(d) - tonumber(now) ) / 86400 );
+		if(!next and tonumber(d) >= tonumber(now)){
+			next = { n=nd.n; date=d; online=nd.online; ws=ws; daysLeft=daysLeft };
+		}
+		var rt = rowText(nd,ws);
+		if( d.year == curY ) table.push(curRows,rt);
+		elseif( d.year == nextY ) table.push(nextRows,rt);
+		if( nd.n <= 20 and tonumber(d) <= tonumber(histEnd) ){
+			var st, past = false;
+			if( tonumber(d) < tonumber(now) ){
+				past = true;
+				st = "已过期 " ++ math.floor( ( tonumber(now) - tonumber(d) ) / 86400 ) ++ " 天";
+			}
+			elseif( tonumber(now) >= tonumber(ws) ) st = "窗口期内·可办理";
+			else st = "未到办理窗口";
+			table.push(hist,{ d=fmtDate(d); n=nd.n; online=nd.online; st=st; past=past; days=-daysLeft });
+		}
+	}
+
+	var ageYears = math.floor( math.abs( now.diffMonths(reg) ) / 12 );
+	var level = 0;
+	if(next){
+		if(next.daysLeft < 0) level = 2;
+		elseif( tonumber(now) >= tonumber(next.ws) ) level = 1;
+	}
+
+	//处置管理：使用满10年或累计行驶达30万公里可处置
+	var kmNum = tonumber( vin_km_clean(km) ) or 0;
+	var tenY = mkTime(reg,10);
+	var dispo = { eligible = false; reason = ""; detail = "" };
+	if( kmNum >= 300000 ){
+		dispo.eligible = true;
+		dispo.reason = "已可处置：累计行驶已达30万公里";
+		dispo.detail = "当前里程 " ++ (math.floor(kmNum/1000)/10) ++ "万公里";
+	}
+	elseif( tonumber(tenY) <= tonumber(now) ){
+		dispo.eligible = true;
+		dispo.reason = "已可处置：使用已满10年";
+		dispo.detail = "满10年日期：" ++ fmtDate(tenY);
+	}
+	else{
+		dispo.reason = "未到处置条件";
+		var details = {};
+		table.push(details,"满10年处置日期：" ++ fmtDate(tenY));
+		if(kmNum > 0){
+			table.push(details,"当前里程 " ++ (math.floor(kmNum/1000)/10) ++ "万公里");
+			var ageMonths = math.abs( now.diffMonths(reg) );
+			if(ageMonths >= 12){
+				var perYear = math.floor( kmNum / (ageMonths/12) );
+				if(perYear > 0){
+					table.push(details,"年均约 " ++ (math.floor(perYear/1000)/10) ++ "万公里，预计 " ++ math.floor((300000-kmNum)/perYear*10)/10 ++ " 年后达30万公里");
+				}
+			}
+			else{
+				table.push(details,"车龄不足1年，暂无法估算年均里程");
+			}
+		}
+		else{
+			table.push(details,"未录入里程，可补录后估算30万公里处置时间");
+		}
+		dispo.detail = table.concat(details,"；");
+	}
+
+	return {
+		plate = plate; regStr = fmtDate(reg); ageYears = ageYears;
+		next = next; level = level; rule = ruleLabel;
+		curY = curY; nextY = nextY;
+		curRows = curRows; nextRows = nextRows; hist = hist; histEndStr = fmtDate(histEnd);
+		vin = vin or ""; code = code or ""; km = kmNum; dispo = dispo;
+	}
+}
+
+//信号灯级别：0无 / 1蓝(3个月内) / 2黄(2个月内) / 3红(1个月内或逾期)
+var lightLevel = function(daysLeft){
+	var months = daysLeft / 30.4375;
+	if( daysLeft < 0 or months <= 1 ) return 3;
+	if( months <= 2 ) return 2;
+	if( months <= 3 ) return 1;
+	return 0;
+}
+var lightName = function(level){
+	if(level==3) return "红灯闪烁";
+	if(level==2) return "黄灯闪烁";
+	if(level==1) return "蓝灯闪烁";
+	return "绿灯常亮";
+}
+
+var statusText = function(level,daysLeft){
+	if(level==2) return "已逾期 " ++ (-daysLeft) ++ " 天";
+	if(level==1) return "窗口期内·可办理";
+	return "未到办理窗口";
+}
+
+//---------- Excel / CSV 读取 ----------
+
+var cellText = function(v){
+	if( v == null ) return "";
+	if( type(v) == "number" ){
+		if( v > 20000 and v < 80000 ){ //Excel日期序列号（1900日期系统）
+			//坑：aardio time(数字) 按Unix秒解释，Excel序列号须先换算 (序列号-25569)*86400
+			var d = math.floor(v);
+			return tostring( time( (d - 25569) * 86400 ), "%Y-%m-%d" );
+		}
+		return tostring(v);
+	}
+	return tostring(v);
+}
+
+//通过 COM 读取 Excel（兼容 Excel / WPS），返回二维数组
+var createOfficeApp = function(){
+	var progids = { "Excel.Application"; "Ket.Application"; "et.Application" };
+	//ProgID 失效时（如无头/受限环境）按 CLSID 回退：Excel 与 WPS表格
+	var clsids = { "{00024500-0000-0000-C000-000000000046}"; "{45540001-5750-5300-4B49-4E47534F4655}"; "{45540001-5750-5300-4B49-4E47534F4655}" };
+	for(i=1;#progids;1){
+		var app = null;
+		try{ app = com.CreateObject(progids[i]); }
+		catch(e){ app = null; }
+		if(!app){
+			try{ app = com.CreateObject(clsids[i]); }
+			catch(e){ app = null; }
+		}
+		if(app) return app;
+	}
+	return null;
+}
+
+var readExcelRows = function(path){
+	var app,book;
+	var okRows, errMsg;
+	//坑：aardio 的 try 块内 return 会截留返回值（调用方拿到 null），只能赋值外部变量、try 外 return
+	try{
+		app = createOfficeApp();
+		if(!app){
+			errMsg = "本机未找到 Excel 或 WPS 表格（COM组件不可用），请改用 CSV 文件";
+		}
+		else{
+			dbg("readExcel: COM创建成功");
+			app.Visible = false;
+			app.DisplayAlerts = false;
+			book = app.Workbooks.Open(path,0,true);
+			dbg("readExcel: Workbooks.Open 成功");
+			var sheet = book.Sheets.Item(1);
+			var used = sheet.UsedRange;
+			var rCount = used.Rows.Count;
+			var cCount = used.Columns.Count;
+			if(rCount > 2000) rCount = 2000;
+			if(cCount > 20) cCount = 20;
+			dbg("readExcel: UsedRange " ++ rCount ++ "x" ++ cCount);
+			var rows = {};
+			for(r=1;rCount;1){
+				var line = {};
+				for(c=1;cCount;1){
+					table.push(line, cellText( sheet.Cells.Item(r,c).Value2 ) );
+				}
+				table.push(rows,line);
+			}
+			book.Close(false);
+			app.Quit();
+			okRows = rows;
+			dbg("readExcel: 读取完成 " ++ #rows ++ " 行");
+		}
+	}
+	catch(e){
+		try{ book.Close(false); }catch(_){ }
+		try{ app.Quit(); }catch(_){ }
+		errMsg = "读取 Excel 失败：" ++ tostring(e);
+		dbg("readExcel: 异常 " ++ errMsg);
+	}
+	if(errMsg) return null, errMsg;
+	return okRows;
+}
+
+//检测字节数组是否为合法UTF-8（用于CSV编码自动识别）
+var isUtf8Bytes = function(s){
+	var i = 1;
+	var n = #s;
+	while(i <= n){
+		var b = string.byte(s,i);
+		if(b < 0x80){ i++; }
+		elseif( b >= 0xC2 and b <= 0xDF ){
+			if(i+1 > n) return false;
+			var b2 = string.byte(s,i+1);
+			if(b2 < 0x80 or b2 > 0xBF) return false;
+			i += 2;
+		}
+		elseif( b >= 0xE0 and b <= 0xEF ){
+			if(i+2 > n) return false;
+			var b2 = string.byte(s,i+1);
+			var b3 = string.byte(s,i+2);
+			if(b2 < 0x80 or b2 > 0xBF or b3 < 0x80 or b3 > 0xBF) return false;
+			i += 3;
+		}
+		elseif( b >= 0xF0 and b <= 0xF4 ){
+			if(i+3 > n) return false;
+			i += 4;
+		}
+		else{ return false; }
+	}
+	return true;
+}
+
+var readCsvRows = function(path){
+	var str = string.load(path);
+	if(!str) return null,"读取文件失败：" ++ path;
+	if( string.left(str,3) == string.char(0xEF,0xBB,0xBF) ) str = string.sub(str,4); //去BOM
+	if( #str and !isUtf8Bytes(str) ) str = string.fromto(str,0,65001); //ANSI/GBK转UTF-8
+	var lines = string.split(str,'\n');
+	var rows = {};
+	for(i=1;#lines;1){
+		var line = trimStr(lines[i]);
+		if(#line){
+			var arr = string.split(line,",");
+			var rec = {};
+			for(j=1;#arr;1){ table.push(rec, trimStr(arr[j]) ); }
+			table.push(rows,rec);
+		}
+	}
+	return rows;
+}
+
+//从数据行提取 {plate=..;dateStr=..} 列表，自动识别表头列
+var extractVehicles = function(rows){
+	var plateCol = 1;
+	var dateCol = 4;
+	var vinCol = 0;
+	var codeCol = 0;
+	var kmCol = 0;
+	for(r=1;math.min(3,#rows);1){
+		var arr = rows[r];
+		for(c=1;#arr;1){
+			var h = arr[c];
+			if( string.match(h,"车牌") ) plateCol = c;
+			if( string.match(h,"日期") or string.match(h,"登记") ) dateCol = c;
+			if( string.match(h,"车架") or string.match(string.upper(h),"VIN") ) vinCol = c;
+			if( string.match(h,"编号") or string.match(h,"发动机") ) codeCol = c;
+			if( string.match(h,"公里") or string.match(h,"里程") ) kmCol = c;
+		}
+	}
+	var list = {};
+	for(r=1;#rows;1){
+		var arr = rows[r];
+		var plate = trimStr(arr[plateCol]);
+		var dstr = trimStr(arr[dateCol]);
+		var vin = "";
+		var code = "";
+		var km = "";
+		if(vinCol > 0 and vinCol <= #arr) vin = trimStr(arr[vinCol]);
+		if(codeCol > 0 and codeCol <= #arr) code = trimStr(arr[codeCol]);
+		if(kmCol > 0 and kmCol <= #arr) km = trimStr(arr[kmCol]);
+		if( #plate and #dstr and !string.match(plate,"车牌") ){
+			table.push(list,{ plate=plate; dateStr=dstr; vin=vin; code=code; km=km });
+		}
+	}
+	return list;
+}
+
+//---------- 结果卡片（HTML 片段，插入网页结果区） ----------
+
+var esc = function(s){
+	//坑：string.replace 是模式匹配，"<"/">" 单独出现会报 malformed pattern，加 @ 前缀按字面量替换
+	s = string.replace(tostring(s),"@<","&lt;");
+	return string.replace(s,"@>","&gt;");
+}
+
+var wayHtml = function(online){
+	if(online) return '<span class="badge orange">上线检测</span>';
+	return '<span class="badge teal">免检·申领标志</span>';
+}
+
+var lightDot = function(ll){
+	if(ll==0) return '<span class="dot green"></span>';
+	if(ll==3) return '<span class="dot red"></span>';
+	if(ll==2) return '<span class="dot yellow"></span>';
+	return '<span class="dot blue"></span>';
+}
+
+var statusBadge = function(level,daysLeft){
+	if(level==2) return '<span class="badge red">' ++ statusText(level,daysLeft) ++ '</span>';
+	if(level==1) return '<span class="badge green">' ++ statusText(level,daysLeft) ++ '</span>';
+	return '<span class="badge blue">' ++ statusText(level,daysLeft) ++ '</span>';
+}
+
+var rowsBlock = function(rows){
+	if(#rows==0) return '<div class="res-none">本年度无年检项目</div>';
+	var out = {};
+	for(i=1;#rows;1){
+		var r = rows[i];
+		if( string.match(r,"免检") ) r = string.replace(r,"免检·申领标志",'<b class="c-free">免检·申领标志</b>');
+		if( string.match(r,"上线检测") ) r = string.replace(r,"上线检测",'<b class="c-on">上线检测</b>');
+		if( string.match(r,"已过期") ) r = string.replace(r,"已过期",'<span class="c-red">已过期</span>');
+		table.push(out,'<div class="res-row">' ++ r ++ '</div>');
+	}
+	return table.concat(out,"");
+}
+
+var histBlock = function(hist){
+	if(#hist==0) return '<div class="res-none">无检验节点</div>';
+	var out = {};
+	for(i=1;#hist;1){
+		var h = hist[i];
+		var way;
+		if(h.online) way = '<b class="c-on">上线检测</b>'; else way = '<b class="c-free">免检·申领标志</b>';
+		var stCell;
+		if( h.past ) stCell = '<td class="c-red">' ++ h.st ++ '</td>';
+		elseif( h.st == "窗口期内·可办理" ) stCell = '<td class="c-orange">' ++ h.st ++ '</td>';
+		else stCell = '<td class="c-gray">' ++ h.st ++ '</td>';
+		table.push(out,'<tr><td>' ++ h.d ++ '</td><td>第' ++ h.n ++ '年</td><td>' ++ way ++ '</td>' ++ stCell ++ '</tr>');
+	}
+	return '<div class="res-wrap"><table class="res-tbl"><thead><tr><th>检验截止日</th><th>节点</th><th>方式</th><th>状态</th></tr></thead><tbody>' ++ table.concat(out,"") ++ '</tbody></table></div>';
+}
+
+var cardHtml = function(v,showHistory){
+	var plateHtml;
+	if(#v.plate) plateHtml = esc(v.plate); else plateHtml = '<span style="color:#AEAEB2">未填车牌</span>';
+	var s = '<div class="res-card">';
+	s = s ++ '<div class="res-hd">' ++ lightDot( lightLevel(v.next.daysLeft) ) ++ '<span class="res-plate">' ++ plateHtml ++ '</span>' ++ wayHtml(v.next.online) ++ statusBadge(v.level,v.next.daysLeft) ++ '</div>';
+	var metaLine = "登记日期 " ++ v.regStr ++ " · 车龄约 " ++ v.ageYears ++ " 年";
+	if(#v.vin) metaLine = metaLine ++ " · 车架号 " ++ esc(v.vin);
+	if(#v.code) metaLine = metaLine ++ " · 编号 " ++ esc(v.code);
+	metaLine = metaLine ++ " · " ++ esc(v.rule);
+	s = s ++ '<div class="res-meta">' ++ metaLine ++ '</div>';
+	s = s ++ '<div class="res-next"><span>下次年检截止</span><b>' ++ fmtDate(v.next.date) ++ '</b><i>注册后第 ' ++ v.next.n ++ ' 年 · ' ++ lightName( lightLevel(v.next.daysLeft) ) ++ '</i></div>';
+	s = s ++ '<div class="res-sub">可办理窗口：' ++ fmtDate(v.next.ws) ++ ' 至 ' ++ fmtDate(v.next.date) ++ '（期满前3个月可提前办理）';
+	if(v.level==2) s = s ++ ' —— <span class="c-red">已逾期，请尽快办理！</span>';
+	if(v.level==1) s = s ++ ' —— 现在即可办理';
+	s = s ++ '</div>';
+	s = s ++ '<div class="res-sec">当年（' ++ v.curY ++ ' 年）年检信息</div>' ++ rowsBlock(v.curRows);
+	s = s ++ '<div class="res-sec">下一年（' ++ v.nextY ++ ' 年）年检信息</div>' ++ rowsBlock(v.nextRows);
+	//处置管理（满10年或30万公里可处置）
+	var dispoLine;
+	if(v.dispo.eligible){
+		dispoLine = '<span class="c-red">' ++ esc(v.dispo.reason) ++ '</span>';
+		if(#v.dispo.detail) dispoLine = dispoLine ++ ' · ' ++ esc(v.dispo.detail);
+	}
+	else{
+		dispoLine = esc(v.dispo.reason) ++ ' —— ' ++ esc(v.dispo.detail);
+	}
+	s = s ++ '<div class="res-sec">处置管理（使用满10年或行驶30万公里可处置）</div><div class="res-row">' ++ dispoLine ++ '</div>';
+	if(showHistory){
+		var rangeTxt = "";
+		if(v.histEndStr) rangeTxt = "（" ++ v.regStr ++ " 至 " ++ v.histEndStr ++ "）";
+		s = s ++ '<div class="res-sec">20年检验节点 · 自产权登记日起' ++ rangeTxt ++ '</div>' ++ histBlock(v.hist);
+	}
+	s = s ++ '</div>';
+	return s;
+}
+
+var legendHtml = function(){
+	return '<div class="res-tip">'
+		++ '<span><span class="dot blue"></span>蓝灯 = 距到期不足3个月</span>'
+		++ '<span><span class="dot yellow"></span>黄灯 = 不足2个月</span>'
+		++ '<span><span class="dot red"></span>红灯 = 不足1个月或已逾期</span>'
+		++ '</div>';
+}
+
+//生成结果区 HTML（title + 时间 + 卡片列表）
+var renderResult = function(title,nowStr,results,showHistory){
+	var out = {};
+	table.push(out, '<div style="display:flex;align-items:baseline;justify-content:space-between;margin:4px 4px 12px">'
+		++ '<div style="font-size:15px;font-weight:600">' ++ esc(title) ++ '</div>'
+		++ '<div style="font-size:12px;color:#8E8E93">' ++ esc(nowStr) ++ '</div></div>');
+	table.push(out, legendHtml() );
+	for(i=1;#results;1){
+		var v = results[i];
+		if(v.next) table.push(out, cardHtml(v,showHistory) );
+		else{
+			table.push(out,'<div class="res-card"><div class="res-hd"><span class="res-plate">' ++ esc(v.plate) ++ '</span></div>'
+				++ '<div class="res-row">登记日期无法识别：<span class="c-red">' ++ esc(v.regStr) ++ '</span>（待人工处理）</div></div>');
+		}
+	}
+	return table.concat(out,"");
+}
+
+//---------- 预览状态缓存（用于导出与勾选刷新） ----------
+
+var gResults = null;
+var gNowStr = null;
+var gTitle = null;
+
+//---------- 车辆跟踪库（存量车数据层） ----------
+
+var trackingPath = io.fullpath("/车辆跟踪库.csv");
+
+//合并一辆车进跟踪库：车架号优先匹配，否则按车牌+登记日期；新车有里程则更新里程
+var mergeVehicle = function(list,v){
+	for(i=1;#list;1){
+		var it = list[i];
+		var same = false;
+		if( #v.vin and #it.vin and it.vin == v.vin ) same = true;
+		elseif( it.plate == v.plate and it.dateStr == v.dateStr ) same = true;
+		if(same){
+			if( !#v.km and #it.km ) v.km = it.km; //保留原里程
+			list[i] = v;
+			return;
+		}
+	}
+	table.push(list,v);
+}
+
+var saveTracking = function(list){
+	var out = { "车牌号,车架号,编号,登记日期,公里数,免检新政" };
+	for(i=1;#list;1){
+		var p = list[i].plate;
+		if(!#p) p = "未填车牌";
+		var flag;
+		if(list[i].newRules) flag = "1"; else flag = "0";
+		table.push(out, p ++ "," ++ list[i].vin ++ "," ++ list[i].code ++ "," ++ list[i].dateStr ++ "," ++ list[i].km ++ "," ++ flag );
+	}
+	string.save(trackingPath, table.concat(out,'\r\n') );
+}
+
+var loadTracking = function(){
+	var str = string.load(trackingPath);
+	if(!str) return {};
+	if( string.left(str,3) == string.char(0xEF,0xBB,0xBF) ) str = string.sub(str,4);
+	if( #str and !isUtf8Bytes(str) ) str = string.fromto(str,0,65001);
+	var lines = string.split(str,'\n');
+	var list = {};
+	for(i=2;#lines;1){ //跳过表头
+		var line = trimStr(lines[i]);
+		if(#line){
+			var arr = string.split(line,",");
+			if(#arr>=6){
+				table.push(list,{ plate=trimStr(arr[1]); vin=trimStr(arr[2]); code=trimStr(arr[3]);
+					dateStr=trimStr(arr[4]); km=trimStr(arr[5]); newRules=(trimStr(arr[6])=="1") });
+			}
+		}
+	}
+	return list;
+}
+
+//---------- 临时查询历史记录（不进入跟踪库） ----------
+//字段：查询时间,车牌号,车架号,编号,登记日期,公里数,免检新政
+
+var historyPath = io.fullpath("/查询历史.csv");
+var HISTORY_MAX = 200;
+
+var loadHistory = function(){
+	var str = string.load(historyPath);
+	if(!str) return {};
+	if( string.left(str,3) == string.char(0xEF,0xBB,0xBF) ) str = string.sub(str,4);
+	if( #str and !isUtf8Bytes(str) ) str = string.fromto(str,0,65001);
+	var lines = splitLines(str);
+	var list = {};
+	for(i=2;#lines;1){
+		var line = trimStr(lines[i]);
+		if(#line){
+			var arr = string.split(line,",");
+			if(#arr>=7){
+				table.push(list,{ time=trimStr(arr[1]); plate=trimStr(arr[2]); vin=trimStr(arr[3]);
+					code=trimStr(arr[4]); dateStr=trimStr(arr[5]); km=trimStr(arr[6]);
+					newRules=(trimStr(arr[7])=="1") });
+			}
+		}
+	}
+	return list;
+}
+
+var saveHistory = function(list){
+	var out = { "查询时间,车牌号,车架号,编号,登记日期,公里数,免检新政" };
+	for(i=1;#list;1){
+		var h = list[i];
+		table.push(out, h.time ++ "," ++ h.plate ++ "," ++ h.vin ++ "," ++ h.code ++ ","
+			++ h.dateStr ++ "," ++ h.km ++ "," ++ (h.newRules and "1" or "0") );
+	}
+	string.save(historyPath, table.concat(out,'\r\n') );
+}
+
+//追加一条历史（同车牌+车架号+登记日期只保留最新，最多 200 条，倒序）
+var pushHistory = function(v){
+	var list = loadHistory();
+	var out = { v };
+	for(i=1;#list;1){
+		var it = list[i];
+		var same = false;
+		if( #v.vin and #it.vin and it.vin == v.vin and it.dateStr == v.dateStr ) same = true;
+		elseif( it.plate == v.plate and it.dateStr == v.dateStr ) same = true;
+		if(!same) table.push(out,it);
+		if(#out >= HISTORY_MAX) break;
+	}
+	saveHistory(out);
+	return out;
+}
+
+//历史记录 → 网页列表（重新计算，保证数据新鲜）
+var historyRows = function(){
+	var list = loadHistory();
+	var now = nowCached();
+	var rows = {};
+	for(i=1;#list;1){
+		var h = list[i];
+		var reg = parseDate(h.dateStr);
+		var row = { idx=i; time=h.time; plate=h.plate; vin=h.vin; code=h.code; regStr=h.dateStr;
+			due="-"; status="日期无法识别"; level=2 };
+		if(reg){
+			var rule;
+			if(h.newRules) rule = "非营运小微型/摩托车"; else rule = "面包车及其他";
+			var r = buildResult(h.plate,reg,now,h.newRules,rule,h.vin,h.code,h.km);
+			row.due = fmtDate(r.next.date);
+			row.level = r.level;
+			row.status = statusText(r.level,r.next.daysLeft);
+		}
+		table.push(rows,row);
+	}
+	return rows, #list;
+}
+
+var sendHistory = function(){
+	var rows, cnt = historyRows();
+	send({ type="history"; rows=rows; count=cnt });
+}
+
+//---------- 跟踪库 → 网页列表数据 ----------
+
+var buildRows = function(){
+	var list = loadTracking();
+	var now = nowCached();
+	var rows = {};
+	var st = { total=#list; red=0; yellow=0; blue=0; ok=0; dispo=0 };
+	for(i=1;#list;1){
+		var it = list[i];
+		var plate = it.plate;
+		var reg = parseDate(it.dateStr);
+		if(!reg){
+			table.push(rows,{ idx=i; plate=plate; vin=it.vin; code=it.code; km=it.km; newRules=it.newRules;
+				regStr=it.dateStr; age="-"; due="-"; days=9999999; light=4; level=0;
+				wayHtml='<span class="badge gray">-</span>';
+				statusHtml='<span class="badge red">日期无法识别</span>';
+				dispoHtml='<span class="badge gray">-</span>' });
+			continue;
+		}
+		var rule;
+		if(it.newRules) rule = "非营运小微型/摩托车"; else rule = "面包车及其他";
+		var r = buildResult(plate,reg,now,it.newRules,rule,it.vin,it.code,it.km);
+		var ll = lightLevel(r.next.daysLeft);
+		if(ll==3) st.red++; elseif(ll==2) st.yellow++; elseif(ll==1) st.blue++; else st.ok++;
+		if(r.dispo.eligible) st.dispo++;
+		var wayCell;
+		if(r.next.online) wayCell = '<span class="badge orange">上线检测</span>';
+		else wayCell = '<span class="badge teal">免检领标</span>';
+		var statusCell, level;
+		if(r.next.daysLeft < 0){
+			statusCell = '<span class="badge red">逾期 ' ++ (-r.next.daysLeft) ++ ' 天</span>';
+			level = 2;
+		}
+		elseif(r.next.daysLeft <= 92){
+			statusCell = '<span class="badge orange">剩 ' ++ r.next.daysLeft ++ ' 天</span>';
+			level = 1;
+		}
+		else{
+			statusCell = '<span class="badge blue">剩 ' ++ r.next.daysLeft ++ ' 天</span>';
+			level = 0;
+		}
+		var dispoCell;
+		if(r.dispo.eligible) dispoCell = '<span class="badge red">可处置</span>';
+		else dispoCell = '<span class="badge gray">未到</span>';
+		table.push(rows,{ idx=i; plate=plate; vin=it.vin; code=it.code; km=it.km; newRules=it.newRules;
+			regStr=r.regStr; age=r.ageYears; due=fmtDate(r.next.date); days=r.next.daysLeft;
+			light=ll; level=level; wayHtml=wayCell; statusHtml=statusCell; dispoHtml=dispoCell });
+	}
+	//插入排序：按剩余天数升序（exe 中 table.sort 回调参数可能为 null，避免 RAW CALLBACK ERROR）
+	for(i=2;#rows;1){
+		var v = rows[i];
+		var j = i - 1;
+		while( j >= 1 and rows[j].days > v.days ){
+			rows[j+1] = rows[j];
+			j--;
+		}
+		rows[j+1] = v;
+	}
+	return rows, st, #list;
+}
+
+//---------- 与网页通信 ----------
+
+var send = function(t){
+	var str;
+	try{ str = web.json.stringify(t,false,false); }
+	catch(e){ return false; }
+	if(!str) return false;
+	try{ wb.invoke("__recv", str); }
+	catch(e){ return false; }
+	return true;
+}
+
+var toast = function(kind,text){
+	send({ type="toast"; kind=kind; text=text });
+}
+
+var busy = function(on,text){
+	send({ type="busy"; on=on; text=text });
+}
+
+var sendList = function(msg){
+	var rows, st, cnt = buildRows();
+	var t = { type="list"; rows=rows; stats=st; count=cnt };
+	if(msg) t.text = msg;
+	send(t);
+}
+
+var nowStrOf = function(now,net,extra){
+	var s = "查询时间：" ++ tostring(now,"%Y-%m-%d %H:%M:%S") ++ "（" ++ (net and "联网北京时间" or "本机时间") ++ "）";
+	if(extra) s = s ++ " · " ++ extra;
+	return s;
+}
+
+//同步执行网页请求的动作
+//坑：external 回调不一定在界面线程，winform.setTimeout 的定时器消息可能永不触发（表现为一直"正在计算"）
+var uiDo = function(fn){
+	var err;
+	try{ fn(); }
+	catch(e){ err = tostring(e); }
+	if(err){ busy(false); toast("err","操作失败：" ++ err); }
+}
+
+//前向声明：导出 Excel 函数定义在后面，但 doExportExcel 先用到它
+var exportExcel;
+
+//---------- 业务动作 ----------
+
+//① 手动查询
+var doQuery = function(p){
+	var regDate = trimStr(p.regDate);
+	var reg = parseDate(regDate);
+	if(!reg){
+		busy(false);
+		toast("err","登记日期无法识别，请按 2014-01-10 格式填写");
+		return;
+	}
+	var now, net = nowCached();
+	var vtype = tonumber(p.vtype) or 0;
+	var newRules = (vtype == 1);
+	var ruleLabel;
+	if(newRules) ruleLabel = "非营运小微型载客汽车/摩托车（享受免检新政）";
+	else ruleLabel = "面包车及其他车型（不享受免检）";
+	var plate = trimStr(p.plate);
+	var vin = trimStr(p.vin);
+	var code = trimStr(p.code);
+	var kmStr = trimStr(p.km);
+	var showHistory = p.history and true or false;
+	var r = buildResult(plate, reg, now, newRules, ruleLabel, vin, code, kmStr);
+	//结果缓存（供导出与勾选刷新）
+	gResults = { r };
+	gTitle = "手动查询结果";
+	gNowStr = nowStrOf(now,net,"");
+	send({ type="result"; html=renderResult(gTitle,gNowStr,gResults,showHistory); history=showHistory });
+
+	//临时查询只留痕：写入查询历史，不进入存量车跟踪管理
+	//三项标识全空时不记历史，避免产生无意义的空记录
+	if( #plate or #vin or #code ){
+		var kmNum = tonumber( vin_km_clean(kmStr) ) or 0;
+		var kmSave = kmStr;
+		if(kmNum > 0) kmSave = tostring(kmNum);
+		pushHistory({ time=tostring(now,"%Y-%m-%d %H:%M"); plate=plate; vin=vin; code=code;
+			dateStr=regDate; km=kmSave; newRules=newRules });
+		sendHistory();
+	}
+	busy(false);
+}
+
+//勾选 20 年节点后刷新（不重新联网、不重复入库）
+var doRequery = function(p){
+	if(!gResults){ busy(false); return; }
+	var showHistory = p.history and true or false;
+	send({ type="result"; html=renderResult(gTitle,gNowStr,gResults,showHistory); history=showHistory });
+	busy(false);
+}
+
+//② 导入 Excel / CSV 批量查询
+var doImport = function(history,toTracking){
+	var path = fsys.dlg.open("数据文件|*.xlsx;*.xls;*.csv|Excel 文件|*.xlsx;*.xls|CSV 文件|*.csv|所有文件|*.*","选择车辆数据文件",winform.hwnd);
+	if(!path){ busy(false); return; }
+	dbg("②点击选择文件: " ++ path);
+
+	var rows,err;
+	try{
+		if( string.endWith( string.lower(path), ".csv" ) ){
+			rows,err = readCsvRows(path);
+		}
+		else{
+			busy(true,"正在读取 Excel…");
+			rows,err = readExcelRows(path);
+		}
+	}
+	catch(e){
+		rows = null;
+		err = "读取函数内部异常：" ++ tostring(e);
+		dbg("读取函数外层异常: " ++ tostring(e));
+	}
+	if(!rows){
+		busy(false);
+		var msg = err;
+		if(!msg) msg = "读取函数返回空结果且无错误信息";
+		toast("err", msg ++ "（文件：" ++ path ++ "）");
+		return;
+	}
+	dbg("读取成功 " ++ #rows ++ " 行，开始提取车辆");
+	var vehicles = extractVehicles(rows);
+	if(#vehicles==0){
+		busy(false);
+		toast("err","未在文件中找到有效数据：请确保包含车牌列和日期列");
+		return;
+	}
+
+	var now, net = nowCached();
+	var newRules = true; //导入数据默认按免检新政，可在车辆管理中逐台修改
+	var ruleLabel = "非营运小微型载客汽车/摩托车（享受免检新政）";
+	var results = {};
+	var tlist = loadTracking();
+	var impTime = tostring(now,"%Y-%m-%d %H:%M");
+	for(i=1;#vehicles;1){
+		var v = vehicles[i];
+		var reg = parseDate(v.dateStr);
+		if(reg){
+			table.push(results, buildResult(v.plate,reg,now,newRules,ruleLabel,v.vin,v.code,v.km) );
+			//导入数据总是留痕；只有"导入入库"才写跟踪库
+			pushHistory({ time=impTime; plate=v.plate; vin=v.vin; code=v.code;
+				dateStr=v.dateStr; km=v.km; newRules=newRules });
+			if(toTracking){
+				mergeVehicle(tlist,{ plate=v.plate; vin=v.vin; code=v.code; dateStr=v.dateStr; km=v.km; newRules=newRules });
+			}
+		}
+		else{
+			table.push(results,{ plate=v.plate; regStr=v.dateStr; ageYears="-"; next=null;
+				level=0; rule=ruleLabel; curY=now.year; nextY=now.year+1;
+				curRows={}; nextRows={}; hist={} } );
+		}
+	}
+	if(toTracking) saveTracking(tlist);
+	gResults = results;
+	gTitle = "批量查询结果";
+	gNowStr = nowStrOf(now,net,"共 " ++ #results ++ " 台车");
+	send({ type="result"; html=renderResult(gTitle,gNowStr,gResults,history and true or false) });
+	sendHistory();
+	if(toTracking){
+		sendList();
+		toast("ok","已导入 " ++ #results ++ " 台车，并写入跟踪库");
+	}
+	else{
+		toast("ok","已导入 " ++ #results ++ " 台车（仅预览，未写入跟踪库）");
+	}
+	busy(false);
+}
+
+//③ 导出查询结果 Excel
+var doExportExcel = function(history){
+	if(!gResults){ busy(false); toast("err","请先执行查询，再导出 Excel"); return; }
+	var savePath = fsys.dlg.save("Excel 文件|*.xlsx|所有文件|*.*","导出年检结果",winform.hwnd);
+	if(!savePath){ busy(false); return; }
+	if( !string.endWith( string.lower(savePath), ".xlsx" ) ) savePath = savePath ++ ".xlsx";
+	busy(true,"正在导出 Excel…");
+	var ok, err = exportExcel(savePath,gTitle,gNowStr,gResults,history and true or false);
+	busy(false);
+	if(ok) toast("ok","已导出：" ++ savePath);
+	else toast("err","导出失败：" ++ (err or "未知错误"));
+}
+
+//④ 刷新跟踪库
+var doRefresh = function(){
+	sendList();
+	busy(false);
+}
+
+//⑤ 新增 / 编辑车辆
+var doSaveVehicle = function(p){
+	var list = loadTracking();
+	var v = { plate = trimStr(p.plate); vin = trimStr(p.vin); code = trimStr(p.code);
+		dateStr = trimStr(p.regDate); km = vin_km_clean(p.km); newRules = (tonumber(p.vtype) == 1) };
+	if( !parseDate(v.dateStr) ){
+		busy(false);
+		toast("err","登记日期无法识别，请按 2014-01-10 格式填写");
+		return;
+	}
+	var idx = tonumber(p.idx) or 0;
+	var nm = v.plate;
+	if(!#nm) nm = "未填车牌";
+	if( idx > 0 and idx <= #list ){
+		list[idx] = v;
+		toast("ok","已保存修改：" ++ nm);
+	}
+	else{
+		var dup = 0;
+		for(i=1;#list;1){
+			if( (#v.vin and #list[i].vin and list[i].vin == v.vin) or (list[i].plate == v.plate and list[i].dateStr == v.dateStr) ) dup = i;
+		}
+		if(dup) list[dup] = v; else table.push(list,v);
+		toast("ok","已新增：" ++ nm);
+	}
+	saveTracking(list);
+	sendList();
+	busy(false);
+}
+
+//⑥ 删除车辆
+var doDeleteVehicle = function(p){
+	var list = loadTracking();
+	var idx = tonumber(p.idx) or 0;
+	if( idx < 1 or idx > #list ){
+		busy(false);
+		toast("err","未找到要删除的车辆，请刷新后重试");
+		return;
+	}
+	var nm = list[idx].plate;
+	if(!#nm) nm = "未填车牌";
+	var out = {};
+	for(i=1;#list;1){
+		if(i != idx) table.push(out,list[i]);
+	}
+	saveTracking(out);
+	toast("ok","已删除：" ++ nm);
+	sendList();
+	busy(false);
+}
+
+//⑦ 单台车详情（20年节点）
+var doDetail = function(p){
+	var list = loadTracking();
+	var idx = tonumber(p.idx) or 0;
+	if( idx < 1 or idx > #list ){ toast("err","车辆不存在，请刷新"); return; }
+	var it = list[idx];
+	var reg = parseDate(it.dateStr);
+	var title = it.plate;
+	if(!#title) title = "未填车牌";
+	if(!reg){
+		send({ type="detail"; title=title;
+			html='<div class="res-card"><div class="res-row">登记日期无法识别：<span class="c-red">' ++ esc(it.dateStr) ++ '</span>（待人工处理）</div></div>' });
+		return;
+	}
+	var now = nowCached();
+	var rule;
+	if(it.newRules) rule = "非营运小微型/摩托车"; else rule = "面包车及其他";
+	var r = buildResult(it.plate,reg,now,it.newRules,rule,it.vin,it.code,it.km);
+	send({ type="detail"; title="车辆详情 · " ++ title; html=renderResult(title, "登记日期 " ++ r.regStr, {r}, true) });
+}
+
+//⑧ 跟踪库总览（网页表格）
+var doOverview = function(){
+	var list = loadTracking();
+	var now, net = nowCached();
+	var rows = {};
+	var nRed=0; var nYellow=0; var nBlue=0; var nOk=0; var nDispo=0;
+	for(i=1;#list;1){
+		var it = list[i];
+		var reg = parseDate(it.dateStr);
+		if(!reg){
+			table.push(rows,{ days=9999999;
+				html='<tr><td>-</td><td><b>' ++ esc(it.plate) ++ '</b></td><td>' ++ esc(it.vin) ++ '</td><td colspan="6"><span class="c-red">登记日期无法识别：' ++ esc(it.dateStr) ++ '（待人工处理）</span></td></tr>' });
+			continue;
+		}
+		var rule;
+		if(it.newRules) rule = "非营运小微型/摩托车"; else rule = "面包车及其他";
+		var r = buildResult(it.plate,reg,now,it.newRules,rule,it.vin,it.code,it.km);
+		var ll = lightLevel(r.next.daysLeft);
+		if(ll==3) nRed++; elseif(ll==2) nYellow++; elseif(ll==1) nBlue++; else nOk++;
+		if(r.dispo.eligible) nDispo++;
+		var way;
+		if(r.next.online) way = '<b class="c-on">上线检测</b>'; else way = '<b class="c-free">免检领标</b>';
+		var ld;
+		if(r.next.daysLeft < 0) ld = '<span class="c-red">逾期' ++ (-r.next.daysLeft) ++ '天</span>';
+		else ld = '剩' ++ r.next.daysLeft ++ '天';
+		var dp;
+		if(r.dispo.eligible) dp = '<span class="c-red">可处置</span>'; else dp = '<span class="c-gray">未到</span>';
+		var kmTxt = it.km; if(!#kmTxt) kmTxt = "-";
+		var p2 = it.plate; if(!#p2) p2 = "未填车牌";
+		table.push(rows,{ days=r.next.daysLeft;
+			html='<tr><td>' ++ lightDot(ll) ++ '</td><td><b>' ++ esc(p2) ++ '</b></td><td>' ++ esc(it.vin) ++ '</td><td>' ++ kmTxt ++ '</td><td>' ++ r.regStr ++ '</td><td>' ++ r.ageYears ++ '</td><td><b>' ++ fmtDate(r.next.date) ++ '</b></td><td>' ++ way ++ '</td><td>' ++ ld ++ '</td><td>' ++ dp ++ '</td></tr>' });
+	}
+	for(i=2;#rows;1){
+		var v = rows[i];
+		var j = i - 1;
+		while( j >= 1 and rows[j].days > v.days ){
+			rows[j+1] = rows[j];
+			j--;
+		}
+		rows[j+1] = v;
+	}
+	var body = {};
+	for(i=1;#rows;1){ table.push(body,rows[i].html); }
+	var netTxt;
+	if(net) netTxt = "联网时间"; else netTxt = "本机时间";
+	var html = '<div style="font-size:12.5px;color:#6E6E73;margin:0 2px 12px">共 ' ++ #list
+		++ ' 台车 · 按紧急程度排序 · ' ++ netTxt
+		++ ' · <span class="c-red">逾期/1月内 ' ++ nRed ++ '</span> · <span style="color:#A85A00">2月内 ' ++ nYellow
+		++ '</span> · <span style="color:#0B62B8">3月内 ' ++ nBlue ++ '</span> · <span style="color:#1B7D34">正常 ' ++ nOk
+		++ '</span> · 可处置 ' ++ nDispo ++ '</div>'
+		++ '<div class="tablewrap"><table class="tbl"><thead><tr><th></th><th>车牌</th><th>车架号</th><th>公里数</th><th>登记日期</th><th>车龄</th><th>下次截止</th><th>方式</th><th>倒计时</th><th>处置</th></tr></thead><tbody>'
+		++ table.concat(body,"") ++ '</tbody></table></div>'
+		++ '<div class="tip">处置规则：使用满 10 年或累计行驶达 30 万公里可处置车辆；在「当前公里数」框输入里程后查询/导入即可更新里程。</div>';
+	send({ type="overview"; html=html });
+	busy(false);
+}
+
+//⑨ 导出跟踪库 CSV
+var doExportList = function(){
+	var list = loadTracking();
+	if(#list==0){ toast("err","跟踪库为空，无可导出数据"); busy(false); return; }
+	var savePath = fsys.dlg.save("CSV 文件|*.csv|所有文件|*.*","导出车辆跟踪库",winform.hwnd);
+	if(!savePath){ busy(false); return; }
+	if( !string.endWith( string.lower(savePath), ".csv" ) ) savePath = savePath ++ ".csv";
+	var out = { "车牌号,车架号,编号,登记日期,公里数,免检新政,车龄,下次截止,方式,状态,处置" };
+	var now = nowCached();
+	for(i=1;#list;1){
+		var it = list[i];
+		var reg = parseDate(it.dateStr);
+		if(!reg){
+			table.push(out, it.plate ++ "," ++ it.vin ++ "," ++ it.code ++ "," ++ it.dateStr ++ "," ++ it.km ++ ",," ++ ",,,日期无法识别,");
+			continue;
+		}
+		var rule;
+		if(it.newRules) rule = "非营运小微型/摩托车"; else rule = "面包车及其他";
+		var r = buildResult(it.plate,reg,now,it.newRules,rule,it.vin,it.code,it.km);
+		var way;
+		if(r.next.online) way = "上线检测"; else way = "免检领标";
+		var st2;
+		if(r.next.daysLeft < 0) st2 = "逾期" ++ (-r.next.daysLeft) ++ "天";
+		else st2 = "剩" ++ r.next.daysLeft ++ "天";
+		var dp;
+		if(r.dispo.eligible) dp = "可处置"; else dp = "未到";
+		table.push(out, it.plate ++ "," ++ it.vin ++ "," ++ it.code ++ "," ++ it.dateStr ++ "," ++ it.km ++ ","
+			++ (it.newRules and "1" or "0") ++ "," ++ r.ageYears ++ "," ++ fmtDate(r.next.date) ++ "," ++ way ++ "," ++ st2 ++ "," ++ dp);
+	}
+	var str = table.concat(out,'\r\n');
+	str = string.char(0xEF,0xBB,0xBF) ++ str; //BOM，Excel 打开不乱码
+	var okEx2, errEx2;
+	try{ okEx2 = string.save(savePath, str); }
+	catch(e){ errEx2 = tostring(e); }
+	if(okEx2) toast("ok","已导出跟踪库：" ++ savePath);
+	else toast("err","导出失败：" ++ (errEx2 or "无法写入文件"));
+	busy(false);
+}
+
+//---------- 开机自启动 ----------
+
+var getStartupLnk = function(){
+	var lnk = null;
+	try{
+		var ws = com.CreateObject("WScript.Shell");
+		lnk = ws.SpecialFolders("Startup") ++ "\车辆年检助手.lnk"; //try内不可return
+	}
+	catch(e){ lnk = null; }
+	return lnk;
+}
+
+var isAutoRun = function(){
+	var lnk = getStartupLnk();
+	if(!lnk) return false;
+	return io.exist(lnk) and true or false;
+}
+
+var doSetAutoRun = function(on){
+	var lnk = getStartupLnk();
+	if(!lnk){
+		toast("err","无法获取启动文件夹路径");
+		send({ type="autoRun"; on=isAutoRun() });
+		return;
+	}
+	if(on){
+		var okS, errS;
+		try{
+			var ws = com.CreateObject("WScript.Shell");
+			var s = ws.CreateShortcut(lnk);
+			s.TargetPath = io.exepath();
+			s.WorkingDirectory = io.splitpath(io.exepath()).dir;
+			s.Save();
+			okS = true;
+		}
+		catch(e){ errS = tostring(e); }
+		if(okS) toast("ok","已开启开机自启动");
+		else toast("err","创建开机启动失败：" ++ (errS or "未知错误"));
+	}
+	else{
+		try{ io.remove(lnk); }catch(e){ }
+		toast("ok","已关闭开机自启动");
+	}
+	send({ type="autoRun"; on=isAutoRun() });
+}
+
+//---------- 导出Excel（与结果卡片格式一致） ----------
+
+exportExcel = function(savePath,title,nowStr,results,showHistory){
+	var app = createOfficeApp();
+	if(!app){
+		return false,"本机未找到 Excel 或 WPS 表格";
+	}
+	var book = null;
+	var okEx = false;
+	var errMsg = null;
+	var rgb = function(r,g,b){ return r + g*256 + b*65536; };
+	try{
+		app.Visible = false;
+		app.DisplayAlerts = false;
+		book = app.Workbooks.Add();
+		var sheet = book.Sheets.Item(1);
+		sheet.Name = "年检查询结果";
+		//列宽
+		sheet.Columns.Item("A").ColumnWidth = 16;
+		sheet.Columns.Item("B").ColumnWidth = 16;
+		sheet.Columns.Item("C").ColumnWidth = 18;
+		sheet.Columns.Item("D").ColumnWidth = 18;
+		sheet.Columns.Item("E").ColumnWidth = 18;
+		sheet.Columns.Item("F").ColumnWidth = 14;
+		sheet.Columns.Item("G").ColumnWidth = 14;
+
+		//大标题
+		sheet.Cells.Item(1,1).Value2 = title ++ "    " ++ nowStr;
+		sheet.Range("A1:G1").Merge();
+		sheet.Range("A1:G1").Font.Size = 14;
+		sheet.Range("A1:G1").Font.Bold = true;
+		sheet.Range("A1:G1").HorizontalAlignment = -4108; //居中
+
+		var r = 3;
+		for(i=1;#results;1){
+			var v = results[i];
+			if(!v.next){
+				//日期无法识别
+				sheet.Cells.Item(r,1).Value2 = v.plate ++ "  登记日期无法识别：" ++ v.regStr ++ "（待人工处理）";
+				sheet.Range("A" ++ r ++ ":G" ++ r).Merge();
+				sheet.Range("A" ++ r ++ ":G" ++ r).Interior.Color = rgb(255,235,238);
+				sheet.Range("A" ++ r ++ ":G" ++ r).Font.Color = rgb(198,40,40);
+				r = r + 3;
+				continue;
+			}
+			var ll = lightLevel(v.next.daysLeft);
+
+			//行1：车牌 + 方式 + 状态
+			var plateTxt = v.plate;
+			if(!#plateTxt) plateTxt = "未填车牌";
+			sheet.Cells.Item(r,1).Value2 = plateTxt;
+			sheet.Range("A" ++ r ++ ":B" ++ r).Merge();
+			sheet.Cells.Item(r,3).Value2 = statusText(v.level,v.next.daysLeft);
+			sheet.Range("C" ++ r ++ ":D" ++ r).Merge();
+			sheet.Cells.Item(r,5).Value2 = lightName(ll);
+			sheet.Range("E" ++ r ++ ":G" ++ r).Merge();
+			sheet.Range("A" ++ r ++ ":G" ++ r).Font.Bold = true;
+			sheet.Range("A" ++ r ++ ":G" ++ r).HorizontalAlignment = -4108;
+			var cStatus;
+			if(v.level==2) cStatus = rgb(255,235,238); elseif(v.level==1) cStatus = rgb(232,245,233); else cStatus = rgb(227,242,253);
+			sheet.Range("A" ++ r ++ ":G" ++ r).Interior.Color = cStatus;
+			var fStatus;
+			if(v.level==2) fStatus = rgb(198,40,40); elseif(v.level==1) fStatus = rgb(46,125,50); else fStatus = rgb(21,101,192);
+			sheet.Cells.Item(r,1).Font.Size = 13;
+			sheet.Cells.Item(r,3).Font.Color = fStatus;
+			sheet.Cells.Item(r,5).Font.Color = fStatus;
+			r++;
+
+			//行2：登记日期/车龄/规则
+			sheet.Cells.Item(r,1).Value2 = "登记日期";
+			sheet.Cells.Item(r,2).Value2 = v.regStr;
+			sheet.Cells.Item(r,3).Value2 = "车龄约" ++ v.ageYears ++ "年";
+			sheet.Cells.Item(r,4).Value2 = "适用规则";
+			sheet.Range("E" ++ r ++ ":G" ++ r).Merge();
+			sheet.Cells.Item(r,5).Value2 = v.rule;
+			sheet.Range("A" ++ r ++ ":A" ++ r).Font.Bold = true;
+			sheet.Range("D" ++ r ++ ":D" ++ r).Font.Bold = true;
+			r++;
+
+			//行3：下次年检截止 + 窗口
+			sheet.Cells.Item(r,1).Value2 = "下次年检截止";
+			sheet.Cells.Item(r,2).Value2 = fmtDate(v.next.date);
+			sheet.Cells.Item(r,3).Value2 = "注册后第" ++ v.next.n ++ "年";
+			sheet.Cells.Item(r,4).Value2 = "窗口 " ++ fmtDate(v.next.ws) ++ " 至 " ++ fmtDate(v.next.date);
+			sheet.Range("D" ++ r ++ ":G" ++ r).Merge();
+			sheet.Cells.Item(r,1).Font.Bold = true;
+			sheet.Cells.Item(r,2).Font.Color = rgb(26,35,126);
+			sheet.Cells.Item(r,2).Font.Bold = true;
+			r++;
+
+			//行4：车架号/编号（如有）
+			if( #v.vin or #v.code ){
+				sheet.Cells.Item(r,1).Value2 = "车架号";
+				sheet.Range("B" ++ r ++ ":C" ++ r).Merge();
+				sheet.Cells.Item(r,2).Value2 = v.vin;
+				sheet.Cells.Item(r,4).Value2 = "编号";
+				sheet.Range("E" ++ r ++ ":G" ++ r).Merge();
+				sheet.Cells.Item(r,5).Value2 = v.code;
+				sheet.Cells.Item(r,1).Font.Bold = true;
+				sheet.Cells.Item(r,4).Font.Bold = true;
+				r++;
+			}
+
+			//行5：处置管理（满10年或30万公里）
+			sheet.Cells.Item(r,1).Value2 = "处置管理";
+			sheet.Range("B" ++ r ++ ":G" ++ r).Merge();
+			sheet.Cells.Item(r,2).Value2 = v.dispo.reason ++ "  " ++ v.dispo.detail;
+			if(v.dispo.eligible) sheet.Cells.Item(r,2).Font.Color = rgb(198,40,40);
+			sheet.Cells.Item(r,1).Font.Bold = true;
+			r++;
+
+			//当年/下一年信息
+			var sec = function(secTitle,rows){
+				sheet.Cells.Item(r,1).Value2 = secTitle;
+				sheet.Range("A" ++ r ++ ":G" ++ r).Merge();
+				sheet.Range("A" ++ r ++ ":G" ++ r).Interior.Color = rgb(227,242,253);
+				sheet.Range("A" ++ r ++ ":G" ++ r).Font.Bold = true;
+				r++;
+				if(#rows==0){
+					sheet.Cells.Item(r,1).Value2 = "本年度无年检项目";
+					sheet.Range("A" ++ r ++ ":G" ++ r).Merge();
+					r++;
+				}
+				else{
+					for(k=1;#rows;1){
+						sheet.Cells.Item(r,1).Value2 = rows[k];
+						sheet.Range("A" ++ r ++ ":G" ++ r).Merge();
+						r++;
+					}
+				}
+			}
+			sec( "当年（" ++ v.curY ++ "年）年检信息", v.curRows );
+			sec( "下一年（" ++ v.nextY ++ "年）年检信息", v.nextRows );
+
+			//20年检验节点：自产权登记日起（勾选时导出）
+			if( showHistory and #v.hist ){
+				var histTitle = "20年检验节点 · 自产权登记日起";
+				if(v.histEndStr) histTitle = histTitle ++ "（" ++ v.regStr ++ " 至 " ++ v.histEndStr ++ "）";
+				sheet.Cells.Item(r,1).Value2 = histTitle;
+				sheet.Range("A" ++ r ++ ":G" ++ r).Merge();
+				sheet.Range("A" ++ r ++ ":G" ++ r).Interior.Color = rgb(227,242,253);
+				sheet.Range("A" ++ r ++ ":G" ++ r).Font.Bold = true;
+				r++;
+				sheet.Cells.Item(r,1).Value2 = "检验截止日";
+				sheet.Cells.Item(r,2).Value2 = "节点";
+				sheet.Cells.Item(r,3).Value2 = "方式";
+				sheet.Cells.Item(r,4).Value2 = "状态";
+				sheet.Range("A" ++ r ++ ":D" ++ r).Font.Bold = true;
+				r++;
+				for(k=1;#v.hist;1){
+					var h = v.hist[k];
+					sheet.Cells.Item(r,1).Value2 = h.d;
+					sheet.Cells.Item(r,2).Value2 = "第" ++ h.n ++ "年";
+					var w;
+					if(h.online) w = "上线检测"; else w = "免检·申领标志";
+					sheet.Cells.Item(r,3).Value2 = w;
+					sheet.Cells.Item(r,4).Value2 = h.st or "";
+					if( h.past ) sheet.Cells.Item(r,4).Font.Color = rgb(198,40,40);
+					elseif( h.st == "窗口期内·可办理" ) sheet.Cells.Item(r,4).Font.Color = rgb(239,108,0);
+					else sheet.Cells.Item(r,4).Font.Color = rgb(144,164,174);
+					r++;
+				}
+			}
+			r = r + 1; //车辆之间空行
+		}
+
+		book.SaveAs(savePath,51); //51 = xlsx
+		book.Close(false);
+		app.Quit();
+		okEx = true; //try内不可return
+	}
+	catch(e){
+		try{ book.Close(false); }catch(_){ }
+		try{ app.Quit(); }catch(_){ }
+		errMsg = tostring(e);
+	}
+	if(okEx) return true;
+	return false, errMsg;
+}
+
+//---------- 启动提醒（3个月内到期或已逾期） ----------
+
+var buildRemind = function(){
+	var list = loadTracking();
+	var now = nowCached();
+	var items = {};
+	for(i=1;#list;1){
+		var reg = parseDate(list[i].dateStr);
+		if(!reg) continue;
+		var rule;
+		if(list[i].newRules) rule = "非营运小微型/摩托车"; else rule = "面包车及其他";
+		var r = buildResult(list[i].plate,reg,now,list[i].newRules,rule,list[i].vin,list[i].code,list[i].km);
+		if(r.next and r.next.daysLeft <= 92){
+			var ll = lightLevel(r.next.daysLeft);
+			var statusCell;
+			if(r.next.daysLeft < 0) statusCell = '<span class="badge red">逾期 ' ++ (-r.next.daysLeft) ++ ' 天</span>';
+			elseif(ll==2) statusCell = '<span class="badge orange">剩 ' ++ r.next.daysLeft ++ ' 天</span>';
+			else statusCell = '<span class="badge blue">剩 ' ++ r.next.daysLeft ++ ' 天</span>';
+			var p2 = list[i].plate;
+			if(!#p2) p2 = "未填车牌";
+			table.push(items,{ plate=p2; due=fmtDate(r.next.date); light=ll; statusHtml=statusCell });
+		}
+	}
+	return items;
+}
+
+//---------- 网页接口 ----------
+
+//解析网页传来的 JSON 参数（失败返回空表）
+var argOf = function(payload){
+	var p;
+	try{ p = web.json.parse(payload); }catch(e){ p = null; }
+	if(type(p) != type.table) p = {};
+	return p;
+}
+
+wb.external = {
+	//页面加载完成，下发初始状态
+	uiReady = function(a){
+		var rows, st, cnt = buildRows();
+		var now, net = nowCached();
+		var remind = buildRemind();
+		var hrows, hcnt = historyRows();
+		var t = { type="init"; rows=rows; stats=st; count=cnt; autoRun=isAutoRun();
+			remind=remind; nowStr=nowStrOf(now,net,""); histRows=hrows; histCount=hcnt };
+		send(t);
+	};
+
+	//清空查询历史（不影响跟踪库）
+	clearHistory = function(a){
+		saveHistory({});
+		sendHistory();
+		toast("ok","已清空历史查询记录");
+	};
+
+	//回看某条历史记录
+	reviewHistory = function(payload){
+		var idx = tonumber(argOf(payload).idx) or 0;
+		var list = loadHistory();
+		if( idx < 1 or idx > #list ){ toast("err","记录不存在，请刷新"); return; }
+		var h = list[idx];
+		var reg = parseDate(h.dateStr);
+		if(!reg){ toast("err","该记录登记日期无法识别"); return; }
+		var now = nowCached();
+		var rule;
+		if(h.newRules) rule = "非营运小微型/摩托车"; else rule = "面包车及其他";
+		var r = buildResult(h.plate,reg,now,h.newRules,rule,h.vin,h.code,h.km);
+		gResults = { r };
+		gTitle = "历史查询回看";
+		gNowStr = "查询时间：" ++ h.time ++ " · 登记日期 " ++ h.dateStr;
+		send({ type="result"; html=renderResult(gTitle,gNowStr,gResults,false) });
+		send({ type="toast"; kind="ok"; text="已载入 " ++ ( #h.plate and h.plate or "未填车牌" ) ++ " 的历史记录" });
+	};
+
+	query = function(payload){
+		busy(true,"正在计算…");
+		uiDo( function(){
+			var err;
+			try{ doQuery(argOf(payload)); }catch(e){ err = tostring(e); }
+			if(err){ busy(false); toast("err","查询失败：" ++ err); }
+		} );
+	};
+
+	requery = function(payload){
+		var err;
+		try{ doRequery(argOf(payload)); }catch(e){ err = tostring(e); }
+		if(err){ busy(false); toast("err","刷新失败：" ++ err); }
+	};
+
+	importFile = function(payload){
+		busy(true,"请选择数据文件…");
+		uiDo( function(){
+			var err;
+			var a = argOf(payload);
+			try{ doImport(a.history, a.toTracking); }catch(e){ err = tostring(e); }
+			if(err){ busy(false); toast("err","导入失败：" ++ err); }
+		} );
+	};
+
+	exportExcel = function(payload){
+		busy(true,"准备导出…");
+		uiDo( function(){
+			var err;
+			try{ doExportExcel(argOf(payload).history); }catch(e){ err = tostring(e); }
+			if(err){ busy(false); toast("err","导出失败：" ++ err); }
+		} );
+	};
+
+	refresh = function(a){
+		var err;
+		try{ doRefresh(); }catch(e){ err = tostring(e); }
+		if(err){ busy(false); toast("err","刷新失败：" ++ err); }
+	};
+
+	saveVehicle = function(payload){
+		uiDo( function(){
+			var err;
+			try{ doSaveVehicle(argOf(payload)); }catch(e){ err = tostring(e); }
+			if(err){ busy(false); toast("err","保存失败：" ++ err); }
+		} );
+	};
+
+	deleteVehicle = function(payload){
+		var err;
+		try{ doDeleteVehicle(argOf(payload)); }catch(e){ err = tostring(e); }
+		if(err){ busy(false); toast("err","删除失败：" ++ err); }
+	};
+
+	detail = function(payload){
+		var err;
+		try{ doDetail(argOf(payload)); }catch(e){ err = tostring(e); }
+		if(err){ toast("err","读取详情失败：" ++ err); }
+	};
+
+	overview = function(a){
+		busy(true,"生成总览…");
+		uiDo( function(){
+			var err;
+			try{ doOverview(); }catch(e){ err = tostring(e); }
+			if(err){ busy(false); toast("err","生成总览失败：" ++ err); }
+		} );
+	};
+
+	exportList = function(a){
+		busy(true,"准备导出…");
+		uiDo( function(){
+			var err;
+			try{ doExportList(); }catch(e){ err = tostring(e); }
+			if(err){ busy(false); toast("err","导出失败：" ++ err); }
+		} );
+	};
+
+	setAutoRun = function(payload){
+		var err;
+		try{ doSetAutoRun(argOf(payload).on and true or false); }catch(e){ err = tostring(e); }
+		if(err){ toast("err","设置失败：" ++ err); send({ type="autoRun"; on=isAutoRun() }); }
+	};
+};
+
+//---------- 启动 ----------
+
+if(!uiSaved){
+	winform.msgboxErr("界面资源写入失败：" ++ tostring(uiErr) ++ '\r\n\r\n请检查程序所在目录是否可写。');
+}
+
+try{
+	wb.go(uiPath);
+}
+catch(e){
+	winform.msgboxErr("界面加载失败：" ++ tostring(e) ++ '\r\n\r\n请确认系统已安装 Microsoft Edge WebView2 运行时。');
+}
+
+try{ winform.center(); }catch(e){ }
+winform.show();
+//修正 WebView2 视口与窗口尺寸不一致的问题（否则页面会按更大视口布局，右侧内容被裁出窗口）
+try{ wb.adjust(); }catch(e){ }
+win.loopMessage();

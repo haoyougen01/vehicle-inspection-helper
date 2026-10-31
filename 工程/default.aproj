@@ -1,0 +1,4 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<project ver="10" name="车辆年检助手" libEmbed="true" ui="win" output="车辆年检助手.exe" CompanyName="车辆年检助手开源项目" FileDescription="车辆年检助手 - 年检日期计算/跟踪管理/处置管理" LegalCopyright="Copyright (C) 2026" ProductName="车辆年检助手" InternalName="车辆年检助手" FileVersion="4.0.0.22" ProductVersion="4.0.0.22" publishDir="/dist/" dstrip="false">
+	<file name="main.aardio" path="main.aardio" comment="启动程序代码"/>
+</project>

@@ -1,0 +1,422 @@
+//========== 车辆年检助手 V4 全功能模块测试 ==========
+import util.testRunner;
+import time;
+import com;
+import inet.whttp;
+var $ = util.testRunner("车辆年检助手 全功能模块测试");
+
+//========== 公共函数（与程序源码一致） ==========
+
+var trimStr = function(s){
+	return string.trim( tostring(s) );
+}
+
+var parseDate = function(str){
+	str = tostring(str);
+	var y,m,d = string.match(str,"(\d+)[^\d]+(\d+)[^\d]+(\d+)");
+	if(!y) return null;
+	y = tonumber(y); m = tonumber(m); d = tonumber(d);
+	if( y < 1980 or y > 2100 or m < 1 or m > 12 or d < 1 or d > 31 ) return null;
+	var tm = time( string.format("%04d/%02d/%02d",y,m,d), "%Y/%m/%d" );
+	if(!tm) return null;
+	if( tm.month != m or tm.day != d ) return null;
+	return tm;
+}
+
+var mkTime = function(reg,n){
+	var y = reg.year + n;
+	var m = reg.month;
+	var d = reg.day;
+	if( m == 2 and d == 29 ){
+		var leap = (y%4==0 and y%100!=0) or (y%400==0);
+		if(!leap) d = 28;
+	}
+	return time( string.format("%04d/%02d/%02d",y,m,d), "%Y/%m/%d" );
+}
+
+var fmtDate = function(tm){
+	return tostring(tm,"%Y-%m-%d");
+}
+
+var kmClean = function(s){
+	s = tostring(s or "");
+	s = trimStr(s);
+	if(!#s) return "";
+	var num = string.match(s,"(\d+\.?\d*)");
+	if(!num) return "";
+	var wan = string.match(s,"万") or string.match(string.upper(s),"W");
+	if(wan) num = tonumber(num) * 10000;
+	num = tonumber(num);
+	if(!num) return "";
+	return tostring(math.floor(num));
+}
+
+//与程序一致的 COM 创建（ProgID→CLSID 回退）
+var createOfficeApp = function(){
+	var progids = { "Excel.Application"; "Ket.Application"; "et.Application" };
+	var clsids = { "{00024500-0000-0000-C000-000000000046}"; "{45540001-5750-5300-4B49-4E47534F4655}"; "{45540001-5750-5300-4B49-4E47534F4655}" };
+	for(i=1;#progids;1){
+		var app = null;
+		try{ app = com.CreateObject(progids[i]); }
+		catch(e){ app = null; }
+		if(!app){
+			try{ app = com.CreateObject(clsids[i]); }
+			catch(e){ app = null; }
+		}
+		if(app) return app;
+	}
+	return null;
+}
+
+var calcNext = function(dateStr, now){
+	var reg = parseDate(dateStr);
+	if(!reg) return null;
+	var spec = {2;4;6;8;10};
+	var nodes = {};
+	for(i=1;#spec;1){
+		table.push(nodes,{ n=spec[i]; date=mkTime(reg,spec[i]); online=(spec[i]==6 or spec[i]==10) });
+	}
+	var n = 11;
+	while(n <= 60){
+		table.push(nodes,{ n=n; date=mkTime(reg,n); online=true });
+		n++;
+	}
+	for(i=1;#nodes;1){
+		var d = nodes[i].date;
+		if( tonumber(d) >= tonumber(now) ){
+			var ws = time( tostring(d,"%Y/%m/%d"), "%Y/%m/%d" );
+			ws.addMonths(-3);
+			var daysLeft = math.floor( ( tonumber(d) - tonumber(now) ) / 86400 );
+			var level = 0;
+			if( daysLeft < 0 or daysLeft <= 30 ) level = 3;
+			elseif( daysLeft <= 61 ) level = 2;
+			elseif( daysLeft <= 92 ) level = 1;
+			return { date=fmtDate(d); n=nodes[i].n; online=nodes[i].online; ws=fmtDate(ws); daysLeft=daysLeft; level=level };
+		}
+	}
+	return null;
+}
+
+//========== 模块1：日期解析 ==========
+$.expect( fmtDate(parseDate("2014年1月10日")), "2014-01-10", "M1 中文日期" );
+$.expect( fmtDate(parseDate("2014-01-10")), "2014-01-10", "M1 横线日期" );
+$.expect( fmtDate(parseDate("2014/1/10")), "2014-01-10", "M1 斜线日期" );
+$.expect( fmtDate(parseDate("2014年10月27日")), "2014-10-27", "M1 中文两位月份" );
+$.test( parseDate("2014年2月30日")==null, "M1 排除2月30" );
+$.test( parseDate("20261301")==null, "M1 排除13月" );
+$.test( parseDate("abc")==null, "M1 排除纯文本" );
+$.test( parseDate("1979-01-01")==null, "M1 排除越界年份" );
+
+//========== 模块2：闰年与检验节点 ==========
+var regLeap = parseDate("2012-02-29");
+$.expect( fmtDate(mkTime(regLeap,2)), "2014-02-28", "M2 闰2/29+2年回退28" );
+$.expect( fmtDate(mkTime(regLeap,4)), "2016-02-29", "M2 闰2/29+4年保持29" );
+//新规节点年份推算
+var spec = {2;4;6;8;10};
+var okSpec = true;
+for(i=1;#spec;1){
+	var d = mkTime(parseDate("2020-01-01"),spec[i]);
+	if(fmtDate(d) != "20" ++ (20+spec[i]) ++ "-01-01") okSpec = false;
+}
+$.test( okSpec, "M2 新规节点年份推算" );
+$.test( mkTime(parseDate("2020-01-01"),6).year == 2026, "M2 第6年=2026" );
+
+//========== 模块3：年检计算（now = 今天） ==========
+var now = time();
+var r;
+r = calcNext("2014-01-10", now);
+$.expect( r.date, "2027-01-10", "M3 京A00001 截止日" );
+$.expect( r.n, 13, "M3 京A00001 第13年" );
+$.test( r.online, "M3 京A00001 上线检测" );
+
+r = calcNext("2022-12-15", now);
+$.expect( r.date, "2026-12-15", "M3 京D00007 截止日" );
+$.test( !r.online, "M3 京D00007 免检领标" );
+
+r = calcNext("2019-06-26", now);
+$.expect( r.date, "2027-06-26", "M3 京B00003 第8年领标" );
+
+r = calcNext("2021-10-16", now);
+$.expect( r.date, "2027-10-16", "M3 京C00006 第6年上线" );
+
+r = calcNext("2018-10-10", now);
+$.expect( r.date, "2028-10-10", "M3 京A00002 第10年上线" );
+
+r = calcNext("2023-11-22", now);
+$.expect( r.date, "2027-11-22", "M3 京E00008 第4年" );
+
+//窗口起点 = 截止前3个月
+r = calcNext("2014-01-10", now);
+$.expect( r.ws, "2026-10-10", "M3 窗口起点=截止前3个月" );
+
+//信号灯分级
+r = calcNext("2022-12-15", now);
+$.expect( r.level, 2, "M3 京D00007 黄灯(44天)" );
+r = calcNext("2014-01-10", now);
+$.expect( r.level, 1, "M3 京A00001 蓝灯(70天)" );
+
+//========== 模块4：里程清洗 ==========
+$.expect( kmClean("85000"), "85000", "M4 纯数字" );
+$.expect( kmClean("8.5万"), "85000", "M4 中文万" );
+$.expect( kmClean("8.5W"), "85000", "M4 W单位" );
+$.expect( kmClean(" 300000 "), "300000", "M4 带空格" );
+$.expect( kmClean("abc"), "", "M4 无效文本" );
+$.expect( kmClean(""), "", "M4 空串" );
+
+//========== 模块5：处置规则（满10年或30万公里） ==========
+var dispoOf = function(dateStr,km){
+	var reg = parseDate(dateStr);
+	var kmNum = tonumber(kmClean(km)) or 0;
+	var tenY = mkTime(reg,10);
+	if( kmNum >= 300000 ) return "已可处置-30万公里";
+	if( tonumber(tenY) <= tonumber(now) ) return "已可处置-满10年";
+	return "未到处置条件";
+}
+$.expect( dispoOf("2014-01-10",""), "已可处置-满10年", "M5 京A00001 满10年" );
+$.expect( dispoOf("2018-10-10","305000"), "已可处置-30万公里", "M5 里程达标" );
+$.expect( dispoOf("2023-11-22",""), "未到处置条件", "M5 新车未到条件" );
+$.expect( dispoOf("2018-10-10","8.5万"), "未到处置条件", "M5 8.5万公里折算" );
+
+//========== 模块6：联网北京时间 ==========
+var netOk = false; var netVal = "";
+try{
+	var whttp = inet.whttp();
+	var str = whttp.get("https://acs.m.taobao.com/gw/mtop.common.getTimestamp/");
+	whttp.close();
+	var t = string.match(str, `"t".{0,3}"(\d+)"`);
+	if(t){
+		netVal = t;
+		//13位毫秒时间戳，折算年后校验
+		netOk = ( #t == 13 and time(tonumber(t)/1000).year >= 2026 );
+	}
+}
+catch(e){ netOk = false; }
+$.test( netOk, "M6 淘宝北京时间接口(" ++ string.left(netVal,10) ++ "…)" );
+
+//========== 模块7：跟踪库 CSV 持久化（写入/读取/合并去重） ==========
+var testDbPath = io.fullpath("~测试跟踪库临时.csv");
+var saveDb = function(list){
+	var out = { "车牌号,车架号(VIN),编号,登记日期,公里数,免检新政" };
+	for(i=1;#list;1){
+		var v = list[i];
+		var flag = "0";
+		if(v.newRules) flag = "1";
+		table.push(out, (v.plate or "") ++ "," ++ (v.vin or "") ++ "," ++ (v.code or "") ++ "," ++ (v.dateStr or "") ++ "," ++ (v.km or "") ++ "," ++ flag );
+	}
+	string.save(testDbPath, '\xEF\xBB\xBF' ++ table.concat(out,"\r\n") );
+}
+var loadDb = function(){
+	var str = string.load(testDbPath);
+	if(!str) return {};
+	str = string.replace(str,"^\uFEFF","");
+	var lines = string.split(str,"\n");
+	var list = {};
+	for(i=2;#lines;1){
+		var line = trimStr(lines[i]);
+		line = string.replace(line,"\r$","");
+		if(#line){
+			var arr = string.split(line,",");
+			if(#arr>=6){
+				table.push(list,{ plate=arr[1]; vin=arr[2]; code=arr[3]; dateStr=arr[4]; km=arr[5]; newRules=(arr[6]=="1") });
+			}
+		}
+	}
+	return list;
+}
+//合并去重逻辑（按VIN优先）
+var mergeDb = function(oldList, incoming){
+	var merged = {};
+	for(i=1;#oldList;1) table.push(merged, oldList[i]);
+	for(i=1;#incoming;1){
+		var nv = incoming[i];
+		var found = false;
+		for(j=1;#merged;1){
+			if( (#nv.vin and nv.vin==merged[j].vin) or (!#nv.vin and nv.plate==merged[j].plate) ){
+				merged[j].km = nv.km;
+				merged[j].dateStr = nv.dateStr;
+				found = true;
+				break;
+			}
+		}
+		if(!found) table.push(merged, nv);
+	}
+	return merged;
+}
+saveDb({
+	{ plate="京A00021"; vin="VIN111"; code="C1"; dateStr="2020-01-01"; km="10000"; newRules=true };
+	{ plate="京A00022"; vin="VIN222"; code="C2"; dateStr="2021-01-01"; km="20000"; newRules=true };
+});
+var db1 = loadDb();
+$.expect( #db1, 2, "M7 写入后读取条数" );
+$.expect( db1[1].km, "10000", "M7 字段完整性" );
+//重复导入同VIN更新里程，不新增行
+var db2 = mergeDb(db1, { { plate="京A00021"; vin="VIN111"; dateStr="2020-01-01"; km="15000" } });
+$.expect( #db2, 2, "M7 合并去重不增行" );
+$.expect( db2[1].km, "15000", "M7 重复导入更新里程" );
+//新VIN追加
+var db3 = mergeDb(db2, { { plate="京A00023"; vin="VIN333"; dateStr="2022-01-01"; km="5000" } });
+$.expect( #db3, 3, "M7 新车追加" );
+
+//========== 模块8：Excel 导入（桌面真实文件） ==========
+var importXlsx = function(path){
+	var excel = createOfficeApp();
+	if(!excel) return null,"COM不可用";
+	var book = excel.Workbooks.Open(path);
+	var sheet = book.Sheets.Item(1);
+	var rows = sheet.UsedRange.Rows.Count;
+	var cols = sheet.UsedRange.Columns.Count;
+	var grid = {};
+	for(r=1;rows;1){
+		var line = {};
+		for(c=1;cols;1){ table.push(line, sheet.Cells.Item(r,c).Text); }
+		table.push(grid, line);
+	}
+	book.Close(false);
+	excel.Quit();
+	//表头识别
+	var plateCol=1; var dateCol=4; var vinCol=0; var codeCol=0; var kmCol=0;
+	for(c=1;#grid[1];1){
+		var h = grid[1][c];
+		if( string.match(h,"车牌") ) plateCol = c;
+		if( string.match(h,"日期") or string.match(h,"登记") ) dateCol = c;
+		if( string.match(h,"车架") or string.match(string.upper(h),"VIN") ) vinCol = c;
+		if( string.match(h,"编号") or string.match(h,"发动机") ) codeCol = c;
+		if( string.match(h,"公里") or string.match(h,"里程") ) kmCol = c;
+	}
+	var list = {}; var skipped = {};
+	for(r=2;#grid;1){
+		var arr = grid[r];
+		var plate = trimStr(arr[plateCol]);
+		var dstr = trimStr(arr[dateCol]);
+		if(!#plate and !#dstr) continue;
+		var nx = calcNext(dstr, now);
+		if(nx){
+			var vin=""; var code="";
+			if(vinCol>0) vin = trimStr(arr[vinCol]);
+			if(codeCol>0) code = trimStr(arr[codeCol]);
+			table.push(list,{ plate=plate; vin=vin; code=code; r=nx });
+		}
+		else{ table.push(skipped, plate ++ "[" ++ dstr ++ "]"); }
+	}
+	return { list=list; skipped=skipped; rows=rows; cols=cols };
+}
+var sampleXlsx = io.fullpath("~示例数据.xlsx");
+if( !io.exist(sampleXlsx) ){
+	try{
+		var ex0 = createOfficeApp();
+		if(ex0){
+			var bk0 = ex0.Workbooks.Add();
+			var sh0 = bk0.Sheets.Item(1);
+			var data0 = {
+				{ "车牌号"; "车架号(VIN)"; "编号"; "日期" };
+				{ "京A00001"; "LTEST000000000001"; "T2024001"; "2014年1月10日" };
+				{ "京A00002"; "LTEST000000000002"; "T2024002"; "2018年10月10日" };
+				{ "京B00003"; "LTEST000000000003"; "T2024003"; "2019年6月26日" };
+				{ "京B00004"; "LTEST000000000004"; "T2024004"; "2020年10月27日" };
+				{ "京C00005"; "LTEST000000000005"; "T2024005"; "2020年10月29日" };
+				{ "京C00006"; "LTEST000000000006"; "T2024006"; "2021年10月16日" };
+				{ "京D00007"; "LTEST000000000007"; "T2024007"; "2022年12月15日" };
+				{ "京E00008"; "LTEST000000000008"; "T2024008"; "2023年11月22日" };
+				{ "京E00009"; "LTEST000000000009"; "T2024009"; "2024年5月20日" };
+				{ "沪A00010"; "LTEST000000000010"; "T2024010"; "2016年3月15日" };
+			};
+			for(r=1;#data0;1){
+				for(c=1;#data0[r];1){
+					sh0.Cells.Item(r,c).NumberFormat = "@";
+					sh0.Cells.Item(r,c).Value2 = data0[r][c];
+				}
+			}
+			bk0.SaveAs(sampleXlsx, 51);
+			bk0.Close(false);
+			ex0.Quit();
+		}
+	}catch(e){ }
+}
+var imp, impErr = importXlsx(sampleXlsx);
+if(imp){
+	$.expect( imp.rows, 11, "M8 数据行数(1表头+10车)" );
+	$.expect( #imp.list, 10, "M8 10台车全部解析" );
+	$.expect( #imp.skipped, 0, "M8 零跳过" );
+$.test( imp.list[1].vin=="LTEST000000000001", "M8 车架号列识别" );
+$.test( imp.list[1].code=="T2024001", "M8 编号列识别" );
+	$.test( imp.list[1].r.date=="2027-01-10", "M8 首车年检计算" );
+}
+else{
+	$.test( false, "M8 Excel导入 " ++ tostring(impErr) );
+}
+
+//========== 模块9：Excel 导出（写出→读回校验） ==========
+var exportOk = false; var exportDetail = "";
+try{
+	var excel = createOfficeApp();
+	if(excel){
+		var book = excel.Workbooks.Add();
+		var sheet = book.Sheets.Item(1);
+		sheet.Cells.Item(1,1).Value2 = "车牌号";
+		sheet.Cells.Item(1,2).Value2 = "下次年检截止";
+		sheet.Cells.Item(2,1).Value2 = "京A00001";
+		sheet.Cells.Item(2,2).NumberFormat = "@"; //文本格式，防日期自动转换
+		sheet.Cells.Item(2,2).Value2 = "2027-06-26";
+		sheet.Cells.Item(2,1).Font.Bold = true;
+var expPath = io.fullpath("~测试导出临时.xlsx");
+		if(io.exist(expPath)) io.remove(expPath);
+		book.SaveAs(expPath, 51);
+		book.Close(false);
+		excel.Quit();
+		//读回校验（用 Value2 避免列宽不足显示 ####）
+		var excel2 = createOfficeApp();
+		var book2 = excel2.Workbooks.Open(expPath);
+		var sheet2 = book2.Sheets.Item(1);
+		var back1 = tostring(sheet2.Cells.Item(2,1).Value2);
+		var back2 = tostring(sheet2.Cells.Item(2,2).Value2);
+		book2.Close(false);
+		excel2.Quit();
+		exportOk = ( string.indexOf(back1,"京A00001") and back2=="2027-06-26" );
+		exportDetail = back1 ++ "/" ++ back2;
+		io.remove(expPath);
+	}
+	else exportDetail = "COM不可用";
+}
+catch(e){ exportDetail = tostring(e); }
+$.test( exportOk, "M9 导出Excel写出读回(" ++ exportDetail ++ ")" );
+
+//========== 模块10：开机自启路径（WScript.Shell SpecialFolders） ==========
+var startupOk = false; var startupDir = "";
+try{
+	var ws = com.CreateObject("WScript.Shell");
+	startupDir = ws.SpecialFolders("Startup");
+	startupOk = (#startupDir > 0);
+}
+catch(e){ startupOk = false; }
+$.test( startupOk, "M10 启动文件夹定位(" ++ startupDir ++ ")" );
+
+//========== 模块11：20年检验节点（自产权登记日起） ==========
+//与主程序 buildResult 的 hist 规则一致：收 n<=20 的全部节点（含未到期），区间 = 登记日 ~ 登记日+20年
+var histNodes = function(regStr){
+	var reg = parseDate(regStr);
+	if(!reg) return null;
+	var end = mkTime(reg,20);
+	var spec = {2;4;6;8;10};
+	var list = {};
+	for(i=1;#spec;1){
+		var d = mkTime(reg,spec[i]);
+		if( spec[i] <= 20 and tonumber(d) <= tonumber(end) ) table.push(list,spec[i]);
+	}
+	for(n=11;60;1){
+		var d = mkTime(reg,n);
+		if( n <= 20 and tonumber(d) <= tonumber(end) ) table.push(list,n);
+	}
+	return list;
+}
+var nowFix = time("2026/10/31","%Y/%m/%d");
+var hOld = histNodes("2014-01-10");
+$.expect( #hOld, 15, "M11 2014登记车 20年节点共15个" );
+$.expect( hOld[1], 2, "M11 首节点=第2年（登记日起算）" );
+$.expect( hOld[#hOld], 20, "M11 末节点=第20年" );
+var hNew = histNodes("2023-11-22");
+$.expect( #hNew, 15, "M11 新车同样15个节点(含未到期)" );
+$.expect( fmtDate(mkTime(parseDate("2014-01-10"),20)), "2034-01-10", "M11 第20年截止日=登记日+20年" );
+$.test( #histNodes("2000-01-01") == 15, "M11 超20年车仍截断在第20年" );
+
+//========== 汇总 ==========
+return $.report();

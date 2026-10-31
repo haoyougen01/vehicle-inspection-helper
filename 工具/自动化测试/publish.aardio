@@ -1,0 +1,65 @@
+//编程式发布：无需在 IDE 里按 F7
+//用法：python run2.py publish.aardio   （需先运行 aa-bridge 的 aacli.exe）
+//IDE 路径查找顺序：本目录 aardio路径.txt > 环境常见的安装位置
+import process;
+import win;
+import fsys;
+
+var proj = io.fullpath("~/../../工程/default.aproj");
+var exePath = io.fullpath("~/../../工程/dist/车辆年检助手.exe");
+var logPath = io.fullpath("~/publish_log.txt");
+var log = {};
+var put = function(s){
+	table.push(log, tostring(s));
+	string.save(logPath, table.concat(log,'\r\n'));
+};
+
+put("=== publish ===");
+put("proj=" ++ proj);
+
+//1) 找 aardio.exe
+var idePath;
+var cfg = io.fullpath("~/aardio路径.txt");
+if( io.exist(cfg) ){
+	var t = string.load(cfg);
+	if(t) idePath = string.trim(t);
+}
+if( !idePath or !io.exist(idePath) ){
+	var cands = { "C:/aardio/aardio.exe"; "C:/Program Files/aardio/aardio.exe";
+		"C:/Program Files (x86)/aardio/aardio.exe"; "D:/aardio/aardio.exe" };
+	for(i=1;#cands;1){
+		if( io.exist(cands[i]) ){ idePath = cands[i]; break; }
+	}
+}
+if( !idePath or !io.exist(idePath) ){
+	put("ERROR: 未找到 aardio.exe，请在本目录新建 aardio路径.txt 写入完整路径");
+	return;
+}
+put("ide=" ++ idePath);
+
+//2) 必须先启动 IDE 进程，再 import ide（否则 joined 恒为 false）
+process.execute(idePath, '"' ++ proj ++ '"');
+put("ide launched, waiting...");
+win.delay(8000);
+
+import ide;
+put("joined=" ++ tostring(ide.command.joined()));
+
+//3) 发布（返回值恒为 null，不能当成败依据）
+var r = null;
+try{ r = ide.publish(); }catch(e){ put("publish err " ++ tostring(e)); }
+
+//4) 轮询 exe 修改时间确认构建成功
+var before = 0;
+try{ before = io.filetime(exePath) or 0; }catch(e){ }
+var okBuild = false;
+for(i=1;45;1){
+	win.delay(1000);
+	var t = 0;
+	try{ t = io.filetime(exePath) or 0; }catch(e){ }
+	if( t and t != before ){ okBuild = true; put("exe updated " ++ tostring(t)); break; }
+}
+var sz = 0;
+try{ sz = io.filesize(exePath) or 0; }catch(e){ }
+put("build=" ++ tostring(okBuild) ++ " size=" ++ tostring(sz));
+put("done");

@@ -1,0 +1,761 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>车辆年检助手</title>
+<style>
+:root{
+  --bg:#F5F5F7; --card:#FFFFFF; --text:#1D1D1F; --text2:#6E6E73; --text3:#8E8E93;
+  --line:#E8E8ED; --line2:#F2F2F5; --blue:#0071E3; --blue-h:#0077ED;
+  --red:#FF3B30; --orange:#FF9500; --green:#34C759; --teal:#30B0C7;
+  --shadow:0 1px 2px rgba(0,0,0,.04),0 10px 30px rgba(0,0,0,.06);
+  --radius:18px;
+}
+*{box-sizing:border-box;-webkit-font-smoothing:antialiased;-webkit-tap-highlight-color:transparent;}
+html,body{margin:0;height:100%;}
+body{
+  background:var(--bg);color:var(--text);
+  font:14px/1.55 -apple-system,BlinkMacSystemFont,"SF Pro Text","PingFang SC","Microsoft YaHei UI","Microsoft YaHei",sans-serif;
+  overflow:hidden;
+}
+::-webkit-scrollbar{width:10px;height:10px;}
+::-webkit-scrollbar-thumb{background:#D6D6DB;border-radius:6px;border:3px solid transparent;background-clip:content-box;}
+::-webkit-scrollbar-thumb:hover{background:#BDBDC4;background-clip:content-box;border:3px solid transparent;}
+::-webkit-scrollbar-track{background:transparent;}
+
+/* ---------- 顶栏 ---------- */
+.topbar{
+  position:fixed;left:0;right:0;top:0;height:64px;z-index:60;
+  display:flex;align-items:center;justify-content:space-between;
+  padding:0 26px;background:rgba(255,255,255,.72);
+  -webkit-backdrop-filter:saturate(180%) blur(20px);backdrop-filter:saturate(180%) blur(20px);
+  border-bottom:1px solid var(--line);
+}
+.brand{display:flex;align-items:center;gap:12px;}
+.logo{
+  width:34px;height:34px;border-radius:10px;flex:none;
+  background:linear-gradient(160deg,#0A84FF,#0053C7);
+  display:flex;align-items:center;justify-content:center;
+  box-shadow:0 3px 10px rgba(0,113,227,.32);
+}
+.logo svg{width:19px;height:19px;}
+.brand-t{font-size:15.5px;font-weight:600;letter-spacing:.2px;line-height:1.2;}
+.brand-s{font-size:11.5px;color:var(--text3);margin-top:1px;}
+
+/* 分段控件 */
+.seg{position:relative;display:flex;background:#E9E9EE;border-radius:11px;padding:3px;}
+.seg-thumb{
+  position:absolute;z-index:1;top:3px;left:3px;height:calc(100% - 6px);
+  background:#fff;border-radius:8.5px;
+  box-shadow:0 1px 3px rgba(0,0,0,.12),0 1px 1px rgba(0,0,0,.04);
+  transition:transform .3s cubic-bezier(.4,0,.2,1),width .3s cubic-bezier(.4,0,.2,1);
+}
+.seg-btn{
+  position:relative;z-index:2;border:0;background:transparent;font-family:inherit;
+  padding:7px 22px;border-radius:8.5px;font-size:13.5px;font-weight:500;
+  color:#3C3C43;cursor:pointer;transition:color .22s;white-space:nowrap;
+}
+.seg-btn.active{color:#1D1D1F;font-weight:600;}
+
+/* ---------- 主体 ---------- */
+.main{position:absolute;top:64px;left:0;right:0;bottom:0;overflow-y:auto;padding:24px 26px 34px;}
+.wrap{max-width:1080px;margin:0 auto;}
+.page{display:none;animation:fade .28s ease;}
+.page.active{display:block;}
+@keyframes fade{from{opacity:0;transform:translateY(6px);}to{opacity:1;transform:none;}}
+
+.card{
+  background:var(--card);border-radius:var(--radius);box-shadow:var(--shadow);
+  padding:22px 24px;margin-bottom:16px;
+}
+.card-hd{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:18px;gap:16px;}
+.card-hd h2{margin:0;font-size:16px;font-weight:600;letter-spacing:.2px;}
+.card-hd .hint{font-size:12px;color:var(--text3);}
+
+/* ---------- 表单 ---------- */
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px 18px;}
+.field{display:flex;flex-direction:column;gap:7px;min-width:0;}
+.field>span{font-size:12.5px;color:var(--text2);font-weight:500;}
+.field.wide{grid-column:span 2;}
+input[type=text],select{
+  width:100%;border:1px solid var(--line);background:#FAFAFC;border-radius:11px;
+  padding:10px 13px;font-family:inherit;font-size:14px;color:var(--text);outline:none;
+  transition:border-color .2s,box-shadow .2s,background .2s;appearance:none;
+}
+select{
+  background-image:url("data:image/svg+xml;charset=utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%238E8E93' stroke-width='1.6' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:right 14px center;padding-right:34px;
+}
+input[type=text]:focus,select:focus{border-color:#B3D4FF;background:#fff;box-shadow:0 0 0 4px rgba(0,113,227,.12);}
+input::placeholder{color:#B6B6BB;}
+
+.switch{display:inline-flex;align-items:center;gap:10px;cursor:pointer;font-size:13px;color:var(--text2);user-select:none;}
+.switch input{display:none;}
+.switch .track{width:44px;height:26px;border-radius:13px;background:#E3E3E8;position:relative;transition:background .26s;flex:none;}
+.switch .track:after{
+  content:"";position:absolute;top:2px;left:2px;width:22px;height:22px;border-radius:50%;
+  background:#fff;box-shadow:0 2px 5px rgba(0,0,0,.18);transition:transform .26s;
+}
+.switch input:checked + .track{background:var(--green);}
+.switch input:checked + .track:after{transform:translateX(18px);}
+.switch-row{display:flex;gap:30px;flex-wrap:wrap;margin-top:18px;padding-top:16px;border-top:1px solid var(--line2);}
+
+/* ---------- 按钮 ---------- */
+.btn{
+  font-family:inherit;font-size:13.5px;font-weight:500;border:0;border-radius:980px;
+  padding:10px 22px;background:#EFEFF2;color:var(--text);cursor:pointer;
+  transition:background .18s,transform .12s,color .18s;white-space:nowrap;
+}
+.btn:hover{background:#E5E5EA;}
+.btn:active{transform:scale(.97);}
+.btn.primary{background:var(--blue);color:#fff;box-shadow:0 3px 12px rgba(0,113,227,.28);}
+.btn.primary:hover{background:var(--blue-h);}
+.btn.danger{background:#FFEDEB;color:#D32B1F;}
+.btn.danger:hover{background:#FFE0DC;}
+.btn.sm{padding:8px 16px;font-size:13px;}
+.btn:disabled{opacity:.45;cursor:default;transform:none;}
+.actions{display:flex;gap:12px;margin-top:20px;flex-wrap:wrap;}
+
+/* ---------- 统计 ---------- */
+.stats{display:grid;grid-template-columns:repeat(6,1fr);gap:0;padding:0;overflow:hidden;}
+.stat{padding:18px 20px;border-right:1px solid var(--line2);}
+.stat:last-child{border-right:0;}
+.stat .n{font-size:24px;font-weight:600;letter-spacing:-.4px;line-height:1.15;font-variant-numeric:tabular-nums;}
+.stat .l{font-size:12px;color:var(--text3);margin-top:3px;}
+.stat.red .n{color:var(--red);}
+.stat.orange .n{color:#C77700;}
+.stat.blue .n{color:var(--blue);}
+.stat.green .n{color:#248A3D;}
+
+/* ---------- 工具条 ---------- */
+.toolbar{display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap;}
+.search{position:relative;flex:1;min-width:200px;max-width:340px;}
+.search input{padding-left:34px;}
+.search svg{position:absolute;left:12px;top:50%;transform:translateY(-50%);width:15px;height:15px;stroke:#9E9EA4;}
+
+/* ---------- 表格 ---------- */
+.tablewrap{overflow-x:auto;border-radius:12px;}
+table.tbl{width:100%;border-collapse:collapse;font-size:13px;}
+table.tbl th{
+  position:sticky;top:0;z-index:1;background:#FAFAFC;color:var(--text2);
+  font-weight:600;font-size:11.5px;letter-spacing:.3px;text-align:left;
+  padding:10px 12px;border-bottom:1px solid var(--line);white-space:nowrap;
+}
+table.tbl td{padding:11px 12px;border-bottom:1px solid var(--line2);white-space:nowrap;color:#2C2C2E;}
+table.tbl tbody tr{transition:background .15s;}
+table.tbl tbody tr:hover{background:#F5F9FF;}
+table.tbl tbody tr:last-child td{border-bottom:0;}
+.plate-cell{font-weight:600;font-size:13.5px;letter-spacing:.4px;}
+.mono{font-family:"SF Mono",Consolas,monospace;font-size:12px;color:var(--text2);}
+.td-act{text-align:right;}
+.link{color:var(--blue);cursor:pointer;font-size:12.5px;margin-left:12px;}
+.link:hover{text-decoration:underline;}
+.link.del{color:var(--red);}
+
+/* ---------- 徽章 / 灯 ---------- */
+.badge{display:inline-block;padding:2.5px 9px;border-radius:980px;font-size:11.5px;font-weight:600;line-height:1.5;}
+.badge.red{background:#FFE9E7;color:#C4261B;}
+.badge.orange{background:#FFF2E0;color:#A85A00;}
+.badge.blue{background:#E4F0FF;color:#0B62B8;}
+.badge.green{background:#E4F7E9;color:#1B7D34;}
+.badge.gray{background:#F0F0F3;color:#6E6E73;}
+.badge.teal{background:#E0F5F8;color:#0E7C8C;}
+.dot{display:inline-block;width:9px;height:9px;border-radius:50%;vertical-align:middle;}
+.dot.red{background:#FF3B30;box-shadow:0 0 0 1px rgba(255,59,48,.25);animation:blink 1.05s infinite;}
+.dot.yellow{background:#FFCC00;box-shadow:0 0 0 1px rgba(255,204,0,.3);animation:blink 1.3s infinite;}
+.dot.blue{background:#007AFF;box-shadow:0 0 0 1px rgba(0,122,255,.25);animation:blink 1.6s infinite;}
+.dot.green{background:#34C759;}
+.dot.gray{background:#C7C7CC;}
+@keyframes blink{0%,100%{opacity:1;}50%{opacity:.22;}}
+
+/* ---------- 空状态 ---------- */
+.empty{text-align:center;padding:44px 20px;color:var(--text3);font-size:13px;}
+.empty svg{width:46px;height:46px;stroke:#D2D2D7;margin-bottom:10px;}
+.empty b{display:block;color:var(--text2);font-size:14px;font-weight:600;margin-bottom:4px;}
+
+/* ---------- 查询结果卡片 ---------- */
+.res-card{
+  background:#fff;border-radius:var(--radius);box-shadow:var(--shadow);
+  padding:20px 24px;margin-bottom:16px;
+}
+.res-hd{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+.res-plate{font-size:22px;font-weight:700;letter-spacing:.6px;}
+.res-meta{color:var(--text3);font-size:12.5px;margin:8px 0 16px;line-height:1.7;}
+.res-next{
+  display:flex;align-items:baseline;gap:10px;background:#F5F9FF;border-radius:12px;
+  padding:12px 16px;font-size:13px;color:var(--text2);flex-wrap:wrap;
+}
+.res-next b{font-size:20px;color:#0B3D91;font-weight:700;letter-spacing:.3px;font-variant-numeric:tabular-nums;}
+.res-next i{font-style:normal;color:var(--text3);font-size:12px;}
+.res-sub{font-size:12.5px;color:var(--text2);margin:10px 2px 4px;}
+.res-sec{font-size:12.5px;font-weight:600;color:#3C3C43;margin:18px 0 8px;padding-left:9px;border-left:3px solid #007AFF;}
+.res-row{background:#F7F9FC;border-radius:9px;padding:8px 13px;margin:5px 0;font-size:13px;color:#2C2C2E;}
+.res-none{color:#AEAEB2;font-size:12.5px;padding:4px 13px;}
+.res-wrap{max-height:320px;overflow-y:auto;border:1px solid var(--line);border-radius:12px;margin-top:6px;}
+table.res-tbl{width:100%;border-collapse:collapse;font-size:12.5px;}
+table.res-tbl th{
+  position:sticky;top:0;z-index:1;background:#F5F5F7;color:var(--text2);font-weight:600;
+  text-align:left;padding:8px 12px;font-size:11.5px;
+}
+table.res-tbl td{padding:8px 12px;border-bottom:1px solid var(--line2);}
+table.res-tbl tr:last-child td{border-bottom:0;}
+.c-red{color:#C4261B;font-weight:600;}
+.c-orange{color:#A85A00;font-weight:600;}
+.c-gray{color:#AEAEB2;}
+.c-on{color:#A85A00;font-weight:600;}
+.c-free{color:#0E7C8C;font-weight:600;}
+.res-tip{background:#fff;border-radius:14px;padding:12px 18px;font-size:12px;color:var(--text2);box-shadow:var(--shadow);margin-bottom:16px;display:flex;gap:18px;flex-wrap:wrap;}
+.res-tip span{display:inline-flex;align-items:center;gap:6px;}
+
+/* ---------- 模态 ---------- */
+.mask{
+  position:fixed;inset:0;background:rgba(0,0,0,.28);z-index:200;
+  display:none;align-items:center;justify-content:center;padding:24px;
+  -webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px);
+}
+.mask.on{display:flex;animation:fadein .18s ease;}
+@keyframes fadein{from{opacity:0;}to{opacity:1;}}
+.modal{
+  background:#fff;border-radius:20px;box-shadow:0 24px 80px rgba(0,0,0,.28);
+  width:520px;max-width:100%;max-height:100%;display:flex;flex-direction:column;
+  animation:pop .24s cubic-bezier(.2,.9,.3,1.1);
+}
+.modal.wide{width:760px;}
+@keyframes pop{from{opacity:0;transform:scale(.94) translateY(10px);}to{opacity:1;transform:none;}}
+.modal-hd{padding:20px 24px 0;font-size:16px;font-weight:600;}
+.modal-bd{padding:18px 24px;overflow-y:auto;}
+.modal-ft{padding:0 24px 20px;display:flex;justify-content:flex-end;gap:10px;}
+.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px 16px;}
+.form-grid .full{grid-column:1 / -1;}
+.tip{font-size:12px;color:var(--text3);line-height:1.7;margin-top:14px;}
+
+/* ---------- Toast ---------- */
+#toasts{position:fixed;left:50%;bottom:28px;transform:translateX(-50%);z-index:300;display:flex;flex-direction:column;gap:8px;align-items:center;}
+.toast{
+  background:rgba(29,29,31,.92);color:#fff;font-size:13px;padding:10px 20px;border-radius:980px;
+  box-shadow:0 8px 26px rgba(0,0,0,.24);animation:tin .24s ease;max-width:600px;
+  -webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);
+}
+.toast.ok{background:rgba(36,138,61,.95);}
+.toast.err{background:rgba(211,43,31,.95);}
+@keyframes tin{from{opacity:0;transform:translateY(12px);}to{opacity:1;transform:none;}}
+
+/* ---------- 提醒列表 ---------- */
+.remind-item{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--line2);font-size:13px;}
+.remind-item:last-child{border-bottom:0;}
+.remind-plate{font-weight:600;letter-spacing:.4px;min-width:90px;}
+.remind-t{color:var(--text2);font-size:12.5px;}
+
+/* ---------- 忙碌遮罩 ---------- */
+#busy{position:fixed;inset:0;background:rgba(245,245,247,.6);z-index:250;display:none;align-items:center;justify-content:center;-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px);}
+#busy.on{display:flex;}
+.spinner{width:26px;height:26px;border:2.5px solid #D6D6DB;border-top-color:var(--blue);border-radius:50%;animation:spin .8s linear infinite;}
+@keyframes spin{to{transform:rotate(360deg);}}
+.busy-box{background:#fff;border-radius:16px;box-shadow:var(--shadow);padding:18px 26px;display:flex;align-items:center;gap:14px;font-size:13.5px;color:var(--text2);}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <div class="logo">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M5 17h14M6.5 17V13l1.8-4.2A2 2 0 0 1 10.1 7.5h3.8a2 2 0 0 1 1.8 1.3L17.5 13v4"/>
+        <circle cx="8" cy="17.5" r="1.6"/><circle cx="16" cy="17.5" r="1.6"/>
+      </svg>
+    </div>
+    <div>
+      <div class="brand-t">车辆年检助手</div>
+      <div class="brand-s">依据 公交管〔2022〕295号 · 自动计算检验周期</div>
+    </div>
+  </div>
+  <div class="seg" id="seg">
+    <span class="seg-thumb" id="segThumb"></span>
+    <button class="seg-btn active" data-tab="query">临时车辆查询</button>
+    <button class="seg-btn" data-tab="manage">存量车跟踪管理</button>
+  </div>
+</header>
+
+<div class="main">
+<div class="wrap">
+
+  
+  <section class="page active" id="page-query">
+    <div class="card">
+      <div class="card-hd">
+        <h2>查询条件</h2>
+        <span class="hint">临时查询不写入存量车跟踪管理，仅留存查询记录</span>
+      </div>
+      <div class="grid">
+        <label class="field"><span>车牌号（选填）</span>
+          <input type="text" id="plate" placeholder="如 京A12345" maxlength="12">
+        </label>
+        <label class="field"><span>车架号（选填）</span>
+          <input type="text" id="vin" placeholder="VIN / 车架号" maxlength="24">
+        </label>
+        <label class="field"><span>编号（选填）</span>
+          <input type="text" id="code" placeholder="车辆编号 / 发动机号" maxlength="24">
+        </label>
+        <label class="field"><span>产权登记日期</span>
+          <input type="text" id="regDate" placeholder="2014-01-10" value="2014-01-10">
+        </label>
+        <label class="field"><span>车辆类型</span>
+          <select id="vtype">
+            <option value="1">非营运小微型载客汽车 / 摩托车（免检新政）</option>
+            <option value="0">面包车及其他车型（不享受免检）</option>
+          </select>
+        </label>
+        <label class="field"><span>当前公里数（选填）</span>
+          <input type="text" id="km" placeholder="85000 或 8.5万">
+        </label>
+      </div>
+      <div class="switch-row">
+        <label class="switch"><input type="checkbox" id="chkHist"><span class="track"></span><span>同时预览 20 年检验节点（自登记日起算）</span></label>
+        <label class="switch"><input type="checkbox" id="chkAuto"><span class="track"></span><span>开机自动启动并弹窗提醒</span></label>
+      </div>
+      <div class="actions">
+        <button class="btn primary" id="btnQuery">开始查询</button>
+        <button class="btn" id="btnImport">导入 Excel 批量查询</button>
+        <button class="btn" id="btnExport">导出 Excel</button>
+      </div>
+    </div>
+
+    <div id="queryResult">
+      <div class="card">
+        <div class="empty">
+          <svg viewBox="0 0 24 24" fill="none" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="11" cy="11" r="7"/><path d="M20 20l-4.2-4.2"/>
+          </svg>
+          <b>还没有查询结果</b>
+          填写产权登记日期后点击「开始查询」，或导入 Excel 批量查询
+        </div>
+      </div>
+    </div>
+  
+    <div class="card">
+      <div class="card-hd">
+        <h2>历史查询记录</h2>
+        <span class="hint">仅作查询留痕，不进入跟踪管理</span>
+        <span style="flex:1"></span>
+        <button class="btn sm" id="btnClearHist">清空记录</button>
+      </div>
+      <div class="tablewrap">
+        <table class="tbl">
+          <thead>
+            <tr><th style="width:140px">查询时间</th><th>车牌号</th><th>车架号</th><th>编号</th><th>登记日期</th><th>下次截止</th><th>状态</th><th class="td-act">操作</th></tr>
+          </thead>
+          <tbody id="histBody"></tbody>
+        </table>
+      </div>
+      <div id="histEmpty" class="empty" style="padding:26px 20px">
+        <b>暂无查询记录</b>
+        执行手动查询或批量导入后，这里会留存最近 200 条记录
+      </div>
+    </div>
+</section>
+
+  
+  <section class="page" id="page-manage">
+    <div class="card stats" id="stats">
+      <div class="stat"><div class="n" id="sTotal">0</div><div class="l">跟踪总数</div></div>
+      <div class="stat red"><div class="n" id="sRed">0</div><div class="l">逾期 / 1个月内</div></div>
+      <div class="stat orange"><div class="n" id="sYellow">0</div><div class="l">2个月内</div></div>
+      <div class="stat blue"><div class="n" id="sBlue">0</div><div class="l">3个月内</div></div>
+      <div class="stat green"><div class="n" id="sOk">0</div><div class="l">正常</div></div>
+      <div class="stat"><div class="n" id="sDispo">0</div><div class="l">可处置</div></div>
+    </div>
+
+    <div class="card">
+      <div class="toolbar">
+        <div class="search">
+          <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4.2-4.2"/></svg>
+          <input type="text" id="search" placeholder="搜索车牌 / 车架号 / 编号">
+        </div>
+        <button class="btn primary sm" id="btnAdd">＋ 新增车辆</button>
+        <button class="btn sm" id="btnImportLib">导入 Excel 入库</button>
+        <button class="btn sm" id="btnRefresh">刷新</button>
+        <button class="btn sm" id="btnOverview">总览预览</button>
+        <button class="btn sm" id="btnExportList">导出跟踪库</button>
+      </div>
+      <div class="tablewrap">
+        <table class="tbl">
+          <thead>
+            <tr>
+              <th style="width:34px"></th><th>车牌号</th><th>车架号</th><th>登记日期</th><th>车龄</th>
+              <th>下次截止</th><th>方式</th><th>状态</th><th>处置</th><th class="td-act">操作</th>
+            </tr>
+          </thead>
+          <tbody id="tbody"></tbody>
+        </table>
+      </div>
+      <div id="tblEmpty" class="empty" style="display:none">
+        <b>跟踪库为空</b>
+        点击「＋ 新增车辆」手动录入，或在查询页导入 Excel 后自动入库
+      </div>
+      <div class="tip" id="tblTip">共 0 台车 · 按紧急程度排序 · 单击行查看 20 年详情</div>
+    </div>
+  </section>
+
+</div>
+</div>
+
+
+<div class="mask" id="mask">
+  <div class="modal" id="modal">
+    <div class="modal-hd" id="modalTitle">标题</div>
+    <div class="modal-bd" id="modalBody"></div>
+    <div class="modal-ft" id="modalFoot"></div>
+  </div>
+</div>
+
+<div id="busy"><div class="busy-box"><div class="spinner"></div><span id="busyText">处理中…</span></div></div>
+<div id="toasts"></div>
+
+<script>
+var state = { tab:"query", rows:[], hasResult:false, autoRun:false, queryPayload:null };
+
+function $(id){ return document.getElementById(id); }
+
+/* ---------- 与后端通信 ---------- */
+function call(name, payload){
+  try{
+    //注意：web.view 注入的 window.aardio 就是 external 对象本身（不是 aardio.external）
+    var api = window.aardio;
+    if(!api || !api.uiReady){ toast("err","后台接口未就绪，请重启程序"); return; }
+    var s = (payload === undefined) ? "" : JSON.stringify(payload);
+    api[name](s);
+  }catch(e){ toast("err","调用失败：" + e); }
+}
+
+window.__recv = function(s){
+  var m = null;
+  try{ m = JSON.parse(s); }catch(e){ return; }
+  if(!m || !m.type) return;
+  switch(m.type){
+    case "toast": toast(m.kind || "ok", m.text || ""); break;
+    case "busy": setBusy(!!m.on, m.text); break;
+    case "init":
+      state.autoRun = !!m.autoRun;
+      $("chkAuto").checked = state.autoRun;
+      applyList(m.rows, m.stats, m.count);
+      applyHistory(m.histRows);
+      if(m.remind && m.remind.length) showRemind(m.remind, m.nowStr);
+      break;
+    case "list": applyList(m.rows, m.stats, m.count); break;
+    case "result":
+      $("queryResult").innerHTML = m.html;
+      state.hasResult = true;
+      break;
+    case "autoRun": $("chkAuto").checked = !!m.on; break;
+    case "overview":
+      openModal("跟踪库总览", '<div style="margin:-6px -6px 0">' + m.html + '</div>', [{t:"关闭"}], "wide");
+      break;
+    case "detail":
+      openModal(m.title || "车辆详情", '<div style="margin:-6px -6px 0">' + m.html + '</div>', [{t:"关闭"}], "wide");
+      break;
+    case "remind": showRemind(m.items, m.nowStr); break;
+    case "history": applyHistory(m.rows); break;
+  }
+};
+
+/* ---------- 分段控件 ---------- */
+function moveThumb(){
+  var seg = $("seg");
+  var btns = seg.querySelectorAll(".seg-btn");
+  var active = seg.querySelector(".seg-btn.active");
+  if(!active) return;
+  var thumb = $("segThumb");
+  thumb.style.width = active.offsetWidth + "px";
+  thumb.style.transform = "translateX(" + (active.offsetLeft - 3) + "px)";
+}
+function switchTab(name){
+  if(state.tab === name && document.querySelector(".page.active")) return;
+  state.tab = name;
+  var btns = document.querySelectorAll(".seg-btn");
+  for(var i=0;i<btns.length;i++){
+    btns[i].classList.toggle("active", btns[i].getAttribute("data-tab") === name);
+  }
+  $("page-query").classList.toggle("active", name === "query");
+  $("page-manage").classList.toggle("active", name === "manage");
+  moveThumb();
+  if(name === "manage") call("refresh", {});
+}
+(function(){
+  var btns = document.querySelectorAll(".seg-btn");
+  for(var i=0;i<btns.length;i++){
+    btns[i].onclick = function(){ switchTab(this.getAttribute("data-tab")); };
+  }
+})();
+
+/* ---------- Toast / Busy ---------- */
+function toast(kind, text){
+  if(!text) return;
+  var d = document.createElement("div");
+  d.className = "toast " + (kind || "ok");
+  d.textContent = text;
+  $("toasts").appendChild(d);
+  setTimeout(function(){
+    d.style.transition = "opacity .25s,transform .25s";
+    d.style.opacity = "0"; d.style.transform = "translateY(8px)";
+    setTimeout(function(){ if(d.parentNode) d.parentNode.removeChild(d); }, 260);
+  }, 2600);
+}
+function setBusy(on, text){
+  if(text) $("busyText").textContent = text;
+  $("busy").classList.toggle("on", !!on);
+}
+
+/* ---------- 通用模态 ---------- */
+function openModal(title, bodyHtml, buttons, size){
+  $("modalTitle").textContent = title;
+  $("modalBody").innerHTML = bodyHtml;
+  $("modal").className = "modal" + (size ? " " + size : "");
+  var foot = $("modalFoot");
+  foot.innerHTML = "";
+  (buttons || [{t:"关闭"}]).forEach(function(b){
+    var el = document.createElement("button");
+    el.className = "btn " + (b.cls || "");
+    el.textContent = b.t;
+    el.onclick = function(){
+      if(b.fn && b.fn() === false) return;
+      closeModal();
+    };
+    foot.appendChild(el);
+  });
+  $("mask").classList.add("on");
+}
+function closeModal(){ $("mask").classList.remove("on"); }
+$("mask").onclick = function(e){ if(e.target === this) closeModal(); };
+document.addEventListener("keydown", function(e){ if(e.key === "Escape") closeModal(); });
+
+/* ---------- 列表渲染 ---------- */
+function fmt(v){ return (v === null || v === undefined || v === "") ? "-" : v; }
+function esc(s){
+  return String(s === null || s === undefined ? "" : s)
+    .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+}
+function lightDot(l){
+  var c = "gray";
+  if(l === 3) c = "red"; else if(l === 2) c = "yellow"; else if(l === 1) c = "blue"; else if(l === 0) c = "green";
+  return '<span class="dot ' + c + '"></span>';
+}
+function applyList(rows, stats, count){
+  state.rows = rows || [];
+  if(stats){
+    $("sTotal").textContent = stats.total || 0;
+    $("sRed").textContent = stats.red || 0;
+    $("sYellow").textContent = stats.yellow || 0;
+    $("sBlue").textContent = stats.blue || 0;
+    $("sOk").textContent = stats.ok || 0;
+    $("sDispo").textContent = stats.dispo || 0;
+  }
+  renderTable();
+  $("tblTip").textContent = "共 " + (count === undefined ? state.rows.length : count) + " 台车 · 按紧急程度排序 · 单击行查看 20 年详情";
+}
+
+function renderTable(){
+  var kw = ($("search").value || "").trim().toLowerCase();
+  var tbody = $("tbody");
+  var html = [];
+  var shown = 0;
+  for(var i=0;i<state.rows.length;i++){
+    var r = state.rows[i];
+    if(kw){
+      var hay = (r.plate + " " + r.vin + " " + r.code).toLowerCase();
+      if(hay.indexOf(kw) < 0) continue;
+    }
+    shown++;
+    var stCls = "gray";
+    if(r.level === 2) stCls = "red"; else if(r.level === 1) stCls = "green";
+    html.push('<tr data-idx="' + r.idx + '">'
+      + '<td>' + lightDot(r.light) + '</td>'
+      + '<td class="plate-cell">' + esc(fmt(r.plate)) + '</td>'
+      + '<td class="mono">' + esc(fmt(r.vin)) + '</td>'
+      + '<td>' + esc(fmt(r.regStr)) + '</td>'
+      + '<td>' + esc(fmt(r.age)) + ' 年</td>'
+      + '<td><b>' + esc(fmt(r.due)) + '</b></td>'
+      + '<td>' + r.wayHtml + '</td>'
+      + '<td>' + r.statusHtml + '</td>'
+      + '<td>' + r.dispoHtml + '</td>'
+      + '<td class="td-act"><span class="link" data-act="edit" data-idx="' + r.idx + '">编辑</span>'
+      + '<span class="link del" data-act="del" data-idx="' + r.idx + '">删除</span></td>'
+      + '</tr>');
+  }
+  tbody.innerHTML = html.join("");
+  $("tblEmpty").style.display = state.rows.length ? "none" : "block";
+  if(state.rows.length && shown === 0){
+    tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;color:#8E8E93;padding:26px">没有匹配「' + esc(kw) + '」的车辆</td></tr>';
+  }
+  var trs = tbody.querySelectorAll("tr[data-idx]");
+  for(var k=0;k<trs.length;k++){
+    trs[k].onclick = function(e){
+      var act = e.target.getAttribute && e.target.getAttribute("data-act");
+      var idx = parseInt(e.target.getAttribute && e.target.getAttribute("data-idx"), 10);
+      if(act === "edit"){ e.stopPropagation(); openEditor(idx); return; }
+      if(act === "del"){ e.stopPropagation(); confirmDelete(idx); return; }
+      call("detail", { idx: parseInt(this.getAttribute("data-idx"), 10) });
+    };
+  }
+}
+$("search").oninput = renderTable;
+
+/* ---------- 查询页事件 ---------- */
+$("btnQuery").onclick = function(){
+  var payload = {
+    plate: $("plate").value,
+    vin: $("vin").value,
+    code: $("code").value,
+    regDate: $("regDate").value,
+    vtype: $("vtype").value,
+    km: $("km").value,
+    history: $("chkHist").checked
+  };
+  state.queryPayload = payload;
+  setBusy(true, "正在计算…");
+  call("query", payload);
+};
+$("btnImport").onclick = function(){ call("importFile", { history: $("chkHist").checked }); };
+$("btnExport").onclick = function(){
+  if(!state.hasResult){ toast("err","请先执行查询，再导出 Excel"); return; }
+  call("exportExcel", { history: $("chkHist").checked });
+};
+$("chkHist").onchange = function(){
+  if(state.hasResult && state.queryPayload){ call("requery", { history: this.checked }); }
+};
+$("chkAuto").onchange = function(){ call("setAutoRun", { on: this.checked }); };
+
+/* ---------- 管理页事件 ---------- */
+$("btnRefresh").onclick = function(){ setBusy(true,"刷新中…"); call("refresh", {}); };
+$("btnImportLib").onclick = function(){ setBusy(true,"请选择数据文件…"); call("importFile", { toTracking: true }); };
+$("btnAdd").onclick = function(){ openEditor(0); };
+$("btnOverview").onclick = function(){ call("overview", {}); };
+$("btnExportList").onclick = function(){ call("exportList", {}); };
+
+/* ---------- 新增 / 编辑 ---------- */
+function openEditor(idx){
+  state.editing = idx || 0;
+  var r = null;
+  if(idx){
+    for(var i=0;i<state.rows.length;i++){ if(state.rows[i].idx === idx){ r = state.rows[i]; break; } }
+  }
+  var isNew = !idx;
+  var body = '<div class="form-grid">'
+    + '<label class="field"><span>车牌号</span><input type="text" id="ePlate" placeholder="如 京A12345" value="' + esc(r ? (r.plate || "") : "") + '"></label>'
+    + '<label class="field"><span>登记日期 *</span><input type="text" id="eDate" placeholder="2014-01-10" value="' + esc(r ? (r.regStr || "") : "") + '"></label>'
+    + '<label class="field full"><span>车架号</span><input type="text" id="eVin" placeholder="选填" value="' + esc(r ? (r.vin || "") : "") + '"></label>'
+    + '<label class="field"><span>编号</span><input type="text" id="eCode" placeholder="选填" value="' + esc(r ? (r.code || "") : "") + '"></label>'
+    + '<label class="field"><span>公里数</span><input type="text" id="eKm" placeholder="85000 或 8.5万" value="' + esc(r ? (r.km || "") : "") + '"></label>'
+    + '<label class="field full"><span>车辆类型</span><select id="eType">'
+    + '<option value="1">非营运小微型载客汽车 / 摩托车（免检新政）</option>'
+    + '<option value="0">面包车及其他车型（不享受免检）</option></select></label>'
+    + '</div>'
+    + '<div class="tip">日期可用 2014-01-10、2014年1月10日 或 20140110；公里数可写 85000 或 8.5万。</div>';
+  openModal(isNew ? "新增车辆" : "编辑车辆", body, [
+    { t:"取消" },
+    { t:"保存", cls:"primary", fn: function(){ submitEditor(); return false; } }
+  ]);
+  if(r) $("eType").value = r.newRules ? "1" : "0";
+  if(isNew) $("eType").value = "1";
+  setTimeout(function(){ var el = $(isNew ? "ePlate" : "eDate"); if(el) el.focus(); }, 60);
+}
+
+function submitEditor(){
+  var payload = {
+    idx: state.editing || 0,
+    plate: $("ePlate").value,
+    regDate: $("eDate").value,
+    vin: $("eVin").value,
+    code: $("eCode").value,
+    km: $("eKm").value,
+    vtype: $("eType").value
+  };
+  if(!payload.regDate.trim()){ toast("err","请填写登记日期"); return; }
+  setBusy(true, "保存中…");
+  call("saveVehicle", payload);
+  closeModal();
+}
+
+function confirmDelete(idx){
+  var r = null;
+  for(var i=0;i<state.rows.length;i++){ if(state.rows[i].idx === idx){ r = state.rows[i]; break; } }
+  var name = r ? (r.plate || "未填车牌") : "该车辆";
+  openModal("删除确认", '<div style="font-size:13.5px;color:#3C3C43;line-height:1.8">确定从跟踪库删除 <b>'
+    + esc(name) + '</b> 吗？<br><span style="color:#8E8E93;font-size:12.5px">删除后需重新新增或导入才能恢复。</span></div>',
+    [{ t:"取消" }, { t:"删除", cls:"danger", fn: function(){
+        setBusy(true,"删除中…");
+        call("deleteVehicle", { idx: idx });
+      } }]);
+}
+
+/* ---------- 启动提醒 ---------- */
+function showRemind(items, nowStr){
+  var h = [];
+  for(var i=0;i<items.length;i++){
+    var it = items[i];
+    h.push('<div class="remind-item">' + lightDot(it.light)
+      + '<span class="remind-plate">' + esc(it.plate || "未填车牌") + '</span>'
+      + '<span class="remind-t">截止 ' + esc(it.due) + '</span>'
+      + '<span style="flex:1"></span>'
+      + it.statusHtml + '</div>');
+  }
+  openModal("年检提醒 · " + items.length + " 台车进入办理期", h.join("")
+    + '<div class="tip">检验可在期满前 3 个月内办理；免检车辆可通过「交管12123」APP 申领电子检验标志。</div>',
+    [{ t:"知道了" }, { t:"查看跟踪库", cls:"primary", fn: function(){ switchTab("manage"); } }]);
+}
+
+/* ---------- 历史查询记录 ---------- */
+function applyHistory(rows){
+  var list = [];
+  if(rows){
+    for(var k in rows){ if(rows.hasOwnProperty(k)) list.push(rows[k]); }
+  }
+  var tb = $("histBody");
+  var html = [];
+  for(var i=0;i<list.length;i++){
+    var h = list[i];
+    var stCls = h.level === 2 ? "red" : (h.level === 1 ? "green" : "blue");
+    html.push('<tr data-idx="' + h.idx + '">'
+      + '<td class="mono">' + esc(h.time) + '</td>'
+      + '<td class="plate-cell">' + esc(fmt(h.plate)) + '</td>'
+      + '<td class="mono">' + esc(fmt(h.vin)) + '</td>'
+      + '<td class="mono">' + esc(fmt(h.code)) + '</td>'
+      + '<td>' + esc(fmt(h.regStr)) + '</td>'
+      + '<td><b>' + esc(fmt(h.due)) + '</b></td>'
+      + '<td><span class="badge ' + stCls + '">' + esc(h.status) + '</span></td>'
+      + '<td class="td-act"><span class="link" data-idx="' + h.idx + '">回看</span></td>'
+      + '</tr>');
+  }
+  tb.innerHTML = html.join("");
+  $("histEmpty").style.display = list.length ? "none" : "block";
+  var trs = tb.querySelectorAll("tr[data-idx]");
+  for(var k=0;k<trs.length;k++){
+    trs[k].onclick = function(){
+      call("reviewHistory", { idx: parseInt(this.getAttribute("data-idx"), 10) });
+    };
+  }
+}
+$("btnClearHist").onclick = function(){
+  openModal("清空查询记录", '<div style="font-size:13.5px;color:#3C3C43;line-height:1.8">确定清空全部历史查询记录吗？<br><span style="color:#8E8E93;font-size:12.5px">只影响查询留痕，不影响存量车跟踪库。</span></div>',
+    [{ t:"取消" }, { t:"清空", cls:"danger", fn: function(){ call("clearHistory", {}); } }]);
+};
+
+/* ---------- 启动 ---------- */
+var bootTries = 0;
+function boot(){
+  if(window.aardio && window.aardio.uiReady){
+    moveThumb();
+    call("uiReady", {});
+    return;
+  }
+  if(bootTries++ < 120){ setTimeout(boot, 100); }
+  else toast("err", "后台通信未就绪");
+}
+window.onload = function(){
+  moveThumb();
+  window.onresize = moveThumb;
+  boot();
+};
+</script>
+</body>
+</html>
