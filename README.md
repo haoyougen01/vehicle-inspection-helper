@@ -5,6 +5,9 @@
 [![平台](https://img.shields.io/badge/platform-Windows%2010%2F11-blue)](#)
 [![语言](https://img.shields.io/badge/aardio-%2B%20WebView2-orange)](#)
 [![许可](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![最新版本](https://img.shields.io/github/v/release/haoyougen01/vehicle-inspection-helper?label=release&color=blue)](https://github.com/haoyougen01/vehicle-inspection-helper/releases/latest)
+
+> **直接下载**：[Releases → 车辆年检助手.exe](https://github.com/haoyougen01/vehicle-inspection-helper/releases/latest)（免安装，双击即用）
 
 ---
 
@@ -28,7 +31,7 @@
 
 ## 快速开始
 
-1. 下载/构建 `车辆年检助手.exe`，放到任意目录（建议单独建文件夹）；
+1. **开箱即用**：从 [Releases](https://github.com/haoyougen01/vehicle-inspection-helper/releases/latest) 下载 `车辆年检助手.exe`；或按下方「构建」自行编译。放到任意目录（建议单独建文件夹）；
 2. 双击运行。首次启动会在 exe 同目录自动生成：
    - `车辆跟踪库.csv` —— 车辆台账
    - `查询历史.csv` —— 临时查询留痕
