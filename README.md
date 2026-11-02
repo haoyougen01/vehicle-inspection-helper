@@ -7,7 +7,7 @@
 [![许可](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![最新版本](https://img.shields.io/github/v/release/haoyougen01/vehicle-inspection-helper?label=release&color=blue)](https://github.com/haoyougen01/vehicle-inspection-helper/releases/latest)
 
-> **直接下载**：[Releases → VehicleInspectionHelper-v1.0.1-win64.zip](https://github.com/haoyougen01/vehicle-inspection-helper/releases/latest)（解压双击即用，免安装）
+> **直接下载**：[Releases → VehicleInspectionHelper-v1.0.2-win64.zip](https://github.com/haoyougen01/vehicle-inspection-helper/releases/latest)（解压双击即用，免安装）
 >
 > **使用手册**：[Wiki](https://github.com/haoyougen01/vehicle-inspection-helper/wiki) — 快速开始 ｜ 功能说明 ｜ 年检规则 ｜ 数据与备份 ｜ 常见问题 ｜ 从源码构建
 
@@ -25,16 +25,17 @@
 
 **② 存量车跟踪管理**（台账）
 
-- 新增 / 编辑 / 删除车辆，按紧急程度自动排序；
+- 新增 / 编辑 / 删除车辆，默认按紧急程度（距年检到期天数）排序；
+- **表头点一下即可排序**：车牌号 / 车架号 / 登记日期 / 车龄 / 下次截止 / 处置，再次点击切换升序、降序，表头带 ▲▼ 指示；
 - 六格总览：总数、已逾期、2 个月内、3 个月内、正常、可处置；
 - Excel / CSV 批量导入（表头关键字智能识别列，日期格式宽容；**按 12123 规定自动判定 7 类车型** —— 认 `车辆类型` 列文本，无该列时用 `使用性质` 辅助推断）；
-- 一键导出跟踪库或总览到 Excel（Excel 或 WPS 均可，带样式；可按车导出「**20 年内年检情况**」全节点明细）；
+- 一键导出跟踪库（CSV，**每台车附带「近 20 年内年检情况」全部检验节点**：检验截止日 / 检验节点 / 办理方式 / 状态）或总览到 Excel（Excel 或 WPS 均可，带样式；可按车导出「**20 年内年检情况**」全节点明细）；
 - 启动时自动弹出年检提醒（含开机自启开关，注册表 Run 项，不写快捷方式）；
 - 最小化到系统托盘：点最小化或关闭按钮不退出，托盘图标双击恢复，右键菜单可"显示主界面 / 开关开机自启 / 退出程序"。
 
 ## 快速开始
 
-1. **开箱即用**：从 [Releases](https://github.com/haoyougen01/vehicle-inspection-helper/releases/latest) 下载 `VehicleInspectionHelper-v1.0.1-win64.zip`，解压到任意文件夹（建议单独建一个，如 `D:\车辆年检助手`）；或按下方「构建」自行编译；
+1. **开箱即用**：从 [Releases](https://github.com/haoyougen01/vehicle-inspection-helper/releases/latest) 下载 `VehicleInspectionHelper-v1.0.2-win64.zip`，解压到任意文件夹（建议单独建一个，如 `D:\车辆年检助手`）；或按下方「构建」自行编译；
 2. 双击 `车辆年检助手.exe` 运行。首次启动会在 exe 同目录自动生成：
    - `车辆跟踪库.csv` —— 车辆台账
    - `查询历史.csv` —— 临时查询留痕
@@ -98,7 +99,7 @@
 
 界面文件通过 `var UI_HTML = $"~/ui/index.html";` 在编译期内嵌，因此**改完 index.html 必须重新发布**；程序启动时还会把界面写到 `dist/ui/index.html` 供 WebView2 加载。
 
-更详细的架构、通信协议、数据格式与 26 条踩坑经验见 [文档/开发文档.md](文档/开发文档.md)。
+更详细的架构、通信协议、数据格式与 33 条踩坑经验见 [文档/开发文档.md](文档/开发文档.md)。
 面向使用者的操作手册（功能逐项说明、年检规则、数据备份、常见问题）见 [Wiki](https://github.com/haoyougen01/vehicle-inspection-helper/wiki)。
 把本仓库推到 GitHub（含认证方式、国内网络、常见报错）见 [文档/发布到GitHub.md](文档/发布到GitHub.md)。
 

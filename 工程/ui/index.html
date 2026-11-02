@@ -146,6 +146,10 @@ table.tbl td{padding:11px 12px;border-bottom:1px solid var(--line2);white-space:
 table.tbl tbody tr{transition:background .15s;}
 table.tbl tbody tr:hover{background:#F5F9FF;}
 table.tbl tbody tr:last-child td{border-bottom:0;}
+table.tbl th.sortable{cursor:pointer;user-select:none;white-space:nowrap;}
+table.tbl th.sortable:hover{color:#0B62B8;}
+table.tbl th.sortable.active{color:#0B62B8;}
+table.tbl th .caret{display:inline-block;width:10px;color:#0B62B8;font-size:11px;}
 .plate-cell{font-weight:600;font-size:13.5px;letter-spacing:.4px;}
 .mono{font-family:"SF Mono",Consolas,monospace;font-size:12px;color:var(--text2);}
 .td-act{text-align:right;}
@@ -388,8 +392,15 @@ table.res-tbl tr:last-child td{border-bottom:0;}
         <table class="tbl">
           <thead>
             <tr>
-              <th style="width:34px"></th><th>车牌号</th><th>车架号</th><th>登记日期</th><th>车龄</th>
-              <th>下次截止</th><th>方式</th><th>状态</th><th>处置</th><th class="td-act">操作</th>
+              <th style="width:34px"></th>
+              <th class="sortable" data-sort="plate">车牌号<span class="caret"></span></th>
+              <th class="sortable" data-sort="vin">车架号<span class="caret"></span></th>
+              <th class="sortable" data-sort="regStr">登记日期<span class="caret"></span></th>
+              <th class="sortable" data-sort="age">车龄<span class="caret"></span></th>
+              <th class="sortable" data-sort="due">下次截止<span class="caret"></span></th>
+              <th>方式</th><th>状态</th>
+              <th class="sortable" data-sort="dispo">处置<span class="caret"></span></th>
+              <th class="td-act">操作</th>
             </tr>
           </thead>
           <tbody id="tbody"></tbody>
@@ -419,7 +430,7 @@ table.res-tbl tr:last-child td{border-bottom:0;}
 <div id="toasts"></div>
 
 <script>
-var state = { tab:"query", rows:[], hasResult:false, autoRun:false, queryPayload:null };
+var state = { tab:"query", rows:[], hasResult:false, autoRun:false, queryPayload:null, sort:{by:"days",dir:"asc"} };
 
 function $(id){ return document.getElementById(id); }
 
@@ -494,6 +505,25 @@ function switchTab(name){
   }
 })();
 
+/* ---------- 存量车列表表头排序 ---------- */
+(function(){
+  var ths = document.querySelectorAll("table.tbl thead th.sortable");
+  for(var i=0;i<ths.length;i++){
+    ths[i].onclick = function(){
+      var by = this.getAttribute("data-sort");
+      if(state.sort.by === by){
+        state.sort.dir = (state.sort.dir === "asc") ? "desc" : "asc";
+      } else {
+        state.sort.by = by;
+        state.sort.dir = "asc";
+      }
+      renderSortIndicators();
+      setBusy(true, "排序中…");
+      call("sort", { by: state.sort.by, dir: state.sort.dir });
+    };
+  }
+})();
+
 /* ---------- Toast / Busy ---------- */
 function toast(kind, text){
   if(!text) return;
@@ -557,7 +587,25 @@ function applyList(rows, stats, count){
     $("sDispo").textContent = stats.dispo || 0;
   }
   renderTable();
-  $("tblTip").textContent = "共 " + (count === undefined ? state.rows.length : count) + " 台车 · 按紧急程度排序 · 单击行查看 20 年详情";
+  renderSortIndicators();
+  $("tblTip").textContent = "共 " + (count === undefined ? state.rows.length : count) + " 台车 · 点击表头可排序 · 单击行查看 20 年详情";
+}
+
+//根据当前排序状态高亮表头并显示升降序箭头
+function renderSortIndicators(){
+  var ths = document.querySelectorAll("table.tbl thead th.sortable");
+  for(var i=0;i<ths.length;i++){
+    var by = ths[i].getAttribute("data-sort");
+    var c = ths[i].querySelector(".caret");
+    if(!c) continue;
+    if(state.sort.by === by){
+      ths[i].classList.add("active");
+      c.textContent = state.sort.dir === "asc" ? " ▲" : " ▼";
+    } else {
+      ths[i].classList.remove("active");
+      c.textContent = "";
+    }
+  }
 }
 
 function renderTable(){

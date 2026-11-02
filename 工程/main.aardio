@@ -918,6 +918,51 @@ var historyRows = function(){
 
 //---------- 跟踪库 → 网页列表数据 ----------
 
+//列表排序状态（前端点表头设置，buildRows 据此排序；默认按剩余天数升序=紧急优先）
+var gSortBy = "days";   // plate / vin / regStr / age / due / days / vtype / km / dispo
+var gSortDir = "asc";   // asc / desc
+
+//排序键提取：日期类用 YYYY-MM-DD 文本比较（等价日期序），数字类用数值
+var sortKeyOf = function(row, by){
+	if(by == "plate")  return tostring(row.plate or "");
+	if(by == "vin")    return tostring(row.vin or "");
+	if(by == "code")   return tostring(row.code or "");
+	if(by == "regStr") return tostring(row.regStr or "");
+	if(by == "due")    return tostring(row.due or "");
+	if(by == "age")    return tonumber(row.age) or 0;
+	if(by == "days")   return tonumber(row.days) or 0;
+	if(by == "km")     return tonumber(vin_km_clean(row.km)) or 0;
+	if(by == "vtype")  return tonumber(row.vtype) or 3;
+	if(by == "dispo"){
+		if(row.dispoEligible) return 0; //可处置优先
+		return 1;
+	}
+	return tostring(row.plate or "");
+};
+
+//手动插入排序（exe 中 table.sort 回调参数可能为 null → RAW CALLBACK ERROR，故不依赖 table.sort）
+//用并行 keys 数组存排序键，避免往只读的行对象上挂临时字段
+var sortRows = function(rows, by, dir){
+	by = by or "days";
+	dir = dir or "asc";
+	var asc = (dir == "asc");
+	var n = #rows;
+	var keys = {};
+	for(i=1;n;1){ keys[i] = sortKeyOf(rows[i], by); }
+	for(i=2;n;1){
+		var v = rows[i];
+		var vk = keys[i];
+		var j = i - 1;
+		while( j >= 1 and ((asc and keys[j] > vk) or (!asc and keys[j] < vk)) ){
+			rows[j+1] = rows[j];
+			keys[j+1] = keys[j];
+			j--;
+		}
+		rows[j+1] = v;
+		keys[j+1] = vk;
+	}
+};
+
 var buildRows = function(){
 	var list = loadTracking();
 	var now = nowCached();
@@ -960,18 +1005,11 @@ var buildRows = function(){
 		else dispoCell = '<span class="badge gray">未到</span>';
 		table.push(rows,{ idx=i; plate=plate; vin=it.vin; code=it.code; km=it.km; vtype=it.vtype; sgqk=it.sgqk;
 			regStr=r.regStr; age=r.ageYears; due=fmtDate(r.next.date); days=r.next.daysLeft;
-			light=ll; level=level; wayHtml=wayCell; statusHtml=statusCell; dispoHtml=dispoCell });
+			light=ll; level=level; wayHtml=wayCell; statusHtml=statusCell; dispoHtml=dispoCell;
+			dispoEligible=r.dispo.eligible });
 	}
-	//插入排序：按剩余天数升序（exe 中 table.sort 回调参数可能为 null，避免 RAW CALLBACK ERROR）
-	for(i=2;#rows;1){
-		var v = rows[i];
-		var j = i - 1;
-		while( j >= 1 and rows[j].days > v.days ){
-			rows[j+1] = rows[j];
-			j--;
-		}
-		rows[j+1] = v;
-	}
+	//按当前排序规则排序（默认按剩余天数升序；手动插入排序避免 exe 中 table.sort 回调 null 的 RAW CALLBACK ERROR）
+	sortRows(rows, gSortBy, gSortDir);
 	return rows, st, #list;
 }
 
@@ -1302,7 +1340,7 @@ var doOverview = function(){
 	busy(false);
 }
 
-//⑨ 导出跟踪库 CSV
+//⑨ 导出跟踪库 CSV（概要块 + 每台车近 20 年检验节点块）
 var doExportList = function(){
 	var list = loadTracking();
 	if(#list==0){ toast("err","跟踪库为空，无可导出数据"); busy(false); return; }
@@ -1310,6 +1348,7 @@ var doExportList = function(){
 	if(!savePath){ busy(false); return; }
 	if( !string.endWith( string.lower(savePath), ".csv" ) ) savePath = savePath ++ ".csv";
 	var out = { "车牌号,车架号,编号,登记日期,公里数,车辆类型,事故情况,车龄,下次截止,方式,状态,处置" };
+	var histOut = {}; //第二块：每台车 20 年内检验节点（自登记日起）
 	var now = nowCached();
 	for(i=1;#list;1){
 		var it = list[i];
@@ -1329,13 +1368,25 @@ var doExportList = function(){
 		if(r.dispo.eligible) dp = "可处置"; else dp = "未到";
 		table.push(out, it.plate ++ "," ++ it.vin ++ "," ++ it.code ++ "," ++ it.dateStr ++ "," ++ it.km ++ ","
 			++ vtShort(it.vtype) ++ "," ++ ( (it.sgqk==1) and "有伤亡事故/非法改装" or "无" ) ++ "," ++ r.ageYears ++ "," ++ fmtDate(r.next.date) ++ "," ++ way ++ "," ++ st2 ++ "," ++ dp);
+		//20 年内检验节点（nd.months<=240 的节点，buildResult 已算进 r.hist，自登记日起最多 20 次）
+		for(k=1;#r.hist;1){
+			var h = r.hist[k];
+			var hw = h.online and "上线检测" or "免检·申领标志";
+			table.push(histOut, it.plate ++ "," ++ it.vin ++ "," ++ h.d ++ "," ++ h.label ++ "," ++ hw ++ "," ++ (h.st or ""));
+		}
+	}
+	if(#histOut > 0){
+		table.push(out, "");
+		table.push(out, "车辆 20 年内检验节点（自注册登记日起，同一车辆的多条记录连续排列）");
+		table.push(out, "车牌号,车架号,检验截止日,检验节点,办理方式,状态");
+		for(i=1;#histOut;1){ table.push(out, histOut[i]); }
 	}
 	var str = table.concat(out,'\r\n');
 	str = string.char(0xEF,0xBB,0xBF) ++ str; //BOM，Excel 打开不乱码
 	var okEx2, errEx2;
 	try{ okEx2 = string.save(savePath, str); }
 	catch(e){ errEx2 = tostring(e); }
-	if(okEx2) toast("ok","已导出跟踪库：" ++ savePath);
+	if(okEx2) toast("ok","已导出跟踪库（含近 20 年检验节点）：" ++ savePath);
 	else toast("err","导出失败：" ++ (errEx2 or "无法写入文件"));
 	busy(false);
 }
@@ -1671,6 +1722,18 @@ wb.external = {
 		var err;
 		try{ doRefresh(); }catch(e){ err = tostring(e); }
 		if(err){ busy(false); toast("err","刷新失败：" ++ err); }
+	};
+
+	//存量车列表排序（前端点表头触发）：设置排序字段/方向后重发列表
+	sort = function(payload){
+		busy(true,"排序中…");
+		uiDo( function(){
+			var p = argOf(payload);
+			if(p.by) gSortBy = tostring(p.by);
+			if(p.dir == "asc" or p.dir == "desc") gSortDir = p.dir;
+			sendList();
+			busy(false);
+		} );
 	};
 
 	saveVehicle = function(payload){
